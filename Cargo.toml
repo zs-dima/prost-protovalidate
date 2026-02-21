@@ -44,3 +44,6 @@ serde = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 cel = { version = "0.12", features = ["json", "chrono"] }
 uriparse = "0.6"
+
+# Testing
+pretty_assertions = "1"

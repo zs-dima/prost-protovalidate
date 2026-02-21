@@ -115,6 +115,7 @@ pub(crate) fn merge_violations(
 mod tests {
     use super::{Error, ValidationError, merge_violations};
     use crate::violation::Violation;
+    use pretty_assertions::assert_eq;
 
     fn validation_error(rule_id: &str) -> Error {
         Error::Validation(ValidationError::single(Violation::new("", rule_id, "")))

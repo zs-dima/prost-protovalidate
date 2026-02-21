@@ -573,6 +573,7 @@ mod tests {
     use std::sync::Arc;
 
     use cel::objects::Key as CelKey;
+    use pretty_assertions::assert_eq;
 
     use super::*;
     use crate::config::ValidationConfig;

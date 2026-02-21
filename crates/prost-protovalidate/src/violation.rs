@@ -464,6 +464,7 @@ impl fmt::Display for Violation {
 #[cfg(test)]
 mod tests {
     use super::{Violation, field_path_string};
+    use pretty_assertions::assert_eq;
 
     fn descriptor_field(message: &str, field: &str) -> prost_reflect::FieldDescriptor {
         prost_protovalidate_types::DESCRIPTOR_POOL

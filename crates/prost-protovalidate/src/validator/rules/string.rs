@@ -1,11 +1,10 @@
 use std::collections::HashSet;
-use std::convert::TryFrom;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 
 use regex::Regex;
 use std::sync::LazyLock;
-use uriparse::{URI, URIReference};
+use uriparse::{URIReference, URI};
 
 use crate::config::ValidationConfig;
 use crate::error::{CompilationError, Error, ValidationError};
@@ -159,6 +158,8 @@ impl StringRuleEval {
             }
         }
 
+        // Safety: usize always fits in u64 (max usize ≤ u64::MAX on all targets)
+        #[allow(clippy::cast_possible_truncation)]
         let char_count = s.chars().count() as u64;
 
         if let Some(len) = self.len {
@@ -189,6 +190,8 @@ impl StringRuleEval {
             }
         }
 
+        // Safety: usize always fits in u64 (max usize ≤ u64::MAX on all targets)
+        #[allow(clippy::cast_possible_truncation)]
         let byte_len = s.len() as u64;
 
         if let Some(len) = self.len_bytes {
@@ -877,10 +880,10 @@ fn is_port(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        IpVersion, StringRuleEval, is_host_and_port, is_ip_prefix, is_protobuf_dot_fqn,
-        is_protobuf_fqn, is_tuuid, is_ulid, is_uri_ref,
+        is_host_and_port, is_ip_prefix, is_protobuf_dot_fqn, is_protobuf_fqn, is_tuuid, is_ulid,
+        is_uri_ref, IpVersion, StringRuleEval,
     };
-    use prost_protovalidate_types::{StringRules, string_rules::WellKnown};
+    use prost_protovalidate_types::{string_rules::WellKnown, StringRules};
 
     #[test]
     fn uri_ref_rejects_invalid_sequences() {
@@ -932,10 +935,9 @@ mod tests {
         match StringRuleEval::new(&rules) {
             Ok(_) => panic!("unknown string.well_known_regex enum values must fail compilation"),
             Err(err) => {
-                assert!(
-                    err.cause
-                        .contains("unsupported string.well_known_regex enum value")
-                );
+                assert!(err
+                    .cause
+                    .contains("unsupported string.well_known_regex enum value"));
             }
         }
     }

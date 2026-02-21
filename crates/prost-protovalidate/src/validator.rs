@@ -40,16 +40,7 @@ impl Validator {
         let mut allow_unknown_fields = false;
         let mut additional_descriptor_sets = Vec::new();
         let mut message_descriptors = Vec::new();
-        let mut now_fn: std::sync::Arc<dyn Fn() -> prost_types::Timestamp + Send + Sync> =
-            std::sync::Arc::new(|| {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default();
-                prost_types::Timestamp {
-                    seconds: i64::try_from(now.as_secs()).unwrap_or(i64::MAX),
-                    nanos: i32::try_from(now.subsec_nanos()).unwrap_or(0),
-                }
-            });
+        let mut now_fn = crate::config::default_now_fn();
 
         for opt in options {
             match opt {
@@ -158,6 +149,7 @@ pub fn validate<M: ReflectMessage>(msg: &M) -> Result<(), Error> {
 mod tests {
     use super::*;
     use crate::config::Filter;
+    use pretty_assertions::assert_eq;
     use prost_reflect::{DynamicMessage, MessageDescriptor, ReflectMessage};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
