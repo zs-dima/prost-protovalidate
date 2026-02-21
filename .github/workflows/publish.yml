@@ -30,10 +30,8 @@ jobs:
             fi
           done
 
-      - name: Dry run
-        run: |
-          cargo publish --dry-run -p prost-protovalidate-types
-          cargo publish --dry-run -p prost-protovalidate
+      - name: Dry run (types crate only; main crate depends on types being published first)
+        run: cargo publish --dry-run -p prost-protovalidate-types
 
       # Publish in dependency order with index propagation delay
       - name: Publish prost-protovalidate-types
