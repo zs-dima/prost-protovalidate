@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package protovalidate_types.bufsync;
+
+import "buf/validate/validate.proto";
+
+message Placeholder {
+  string value = 1 [(buf.validate.field).string.min_len = 1];
+}

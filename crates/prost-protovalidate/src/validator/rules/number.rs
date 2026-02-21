@@ -1,0 +1,457 @@
+use std::collections::HashSet;
+
+use crate::config::ValidationConfig;
+use crate::error::{Error, ValidationError};
+use crate::violation::Violation;
+
+/// Macro for float types that need NaN handling and use `Vec`-based `in`/`not_in`.
+macro_rules! float_rule_eval {
+    ($name:ident, $rules_ty:ty, $value_ty:ty, $extract_method:ident, $rules_mod:ident, $prefix:literal) => {
+        pub(crate) struct $name {
+            inner: numeric_inner::NumericInner<$value_ty>,
+        }
+
+        impl $name {
+            pub fn new(rules: &$rules_ty) -> Self {
+                Self {
+                    inner: numeric_inner::NumericInner {
+                        r#const: rules.r#const,
+                        lt: rules.less_than.as_ref().and_then(|lt| match lt {
+                            prost_protovalidate_types::$rules_mod::LessThan::Lt(v) => Some(*v),
+                            _ => None,
+                        }),
+                        lte: rules.less_than.as_ref().and_then(|lt| match lt {
+                            prost_protovalidate_types::$rules_mod::LessThan::Lte(v) => Some(*v),
+                            _ => None,
+                        }),
+                        gt: rules.greater_than.as_ref().and_then(|gt| match gt {
+                            prost_protovalidate_types::$rules_mod::GreaterThan::Gt(v) => Some(*v),
+                            _ => None,
+                        }),
+                        gte: rules.greater_than.as_ref().and_then(|gt| match gt {
+                            prost_protovalidate_types::$rules_mod::GreaterThan::Gte(v) => Some(*v),
+                            _ => None,
+                        }),
+                        r#in: rules.r#in.clone(),
+                        not_in: rules.not_in.clone(),
+                    },
+                }
+            }
+
+            pub fn tautology(&self) -> bool {
+                self.inner.tautology()
+            }
+
+            pub fn evaluate(
+                &self,
+                val: &prost_reflect::Value,
+                _cfg: &ValidationConfig,
+            ) -> Result<(), Error> {
+                let v = match val.$extract_method() {
+                    Some(v) => v as $value_ty,
+                    None => return Ok(()),
+                };
+                self.inner.evaluate(v, $prefix)
+            }
+        }
+    };
+}
+
+/// Macro for integer types (no NaN, use `HashSet` directly).
+macro_rules! int_rule_eval {
+    ($name:ident, $rules_ty:ty, $value_ty:ty, $extract_method:ident, $rules_mod:ident, $prefix:literal) => {
+        pub(crate) struct $name {
+            r#const: Option<$value_ty>,
+            lt: Option<$value_ty>,
+            lte: Option<$value_ty>,
+            gt: Option<$value_ty>,
+            gte: Option<$value_ty>,
+            r#in: HashSet<$value_ty>,
+            not_in: HashSet<$value_ty>,
+        }
+
+        impl $name {
+            pub fn new(rules: &$rules_ty) -> Self {
+                Self {
+                    r#const: rules.r#const,
+                    lt: rules.less_than.as_ref().and_then(|lt| match lt {
+                        prost_protovalidate_types::$rules_mod::LessThan::Lt(v) => Some(*v),
+                        _ => None,
+                    }),
+                    lte: rules.less_than.as_ref().and_then(|lt| match lt {
+                        prost_protovalidate_types::$rules_mod::LessThan::Lte(v) => Some(*v),
+                        _ => None,
+                    }),
+                    gt: rules.greater_than.as_ref().and_then(|gt| match gt {
+                        prost_protovalidate_types::$rules_mod::GreaterThan::Gt(v) => Some(*v),
+                        _ => None,
+                    }),
+                    gte: rules.greater_than.as_ref().and_then(|gt| match gt {
+                        prost_protovalidate_types::$rules_mod::GreaterThan::Gte(v) => Some(*v),
+                        _ => None,
+                    }),
+                    r#in: rules.r#in.iter().copied().collect(),
+                    not_in: rules.not_in.iter().copied().collect(),
+                }
+            }
+
+            pub fn tautology(&self) -> bool {
+                self.r#const.is_none()
+                    && self.lt.is_none()
+                    && self.lte.is_none()
+                    && self.gt.is_none()
+                    && self.gte.is_none()
+                    && self.r#in.is_empty()
+                    && self.not_in.is_empty()
+            }
+
+            pub fn evaluate(
+                &self,
+                val: &prost_reflect::Value,
+                _cfg: &ValidationConfig,
+            ) -> Result<(), Error> {
+                let v = match val.$extract_method() {
+                    Some(v) => v as $value_ty,
+                    None => return Ok(()),
+                };
+
+                let mut violations = Vec::new();
+
+                if let Some(c) = self.r#const {
+                    if v != c {
+                        violations.push(Violation::new(
+                            "",
+                            concat!($prefix, ".const"),
+                            format!("must equal {c}"),
+                        ));
+                    }
+                }
+
+                check_range(
+                    v,
+                    self.gt,
+                    self.gte,
+                    self.lt,
+                    self.lte,
+                    $prefix,
+                    &mut violations,
+                );
+
+                if !self.r#in.is_empty() && !self.r#in.contains(&v) {
+                    violations.push(Violation::new(
+                        "",
+                        concat!($prefix, ".in"),
+                        "must be in list",
+                    ));
+                }
+
+                if self.not_in.contains(&v) {
+                    violations.push(Violation::new(
+                        "",
+                        concat!($prefix, ".not_in"),
+                        "must not be in list",
+                    ));
+                }
+
+                if violations.is_empty() {
+                    Ok(())
+                } else {
+                    Err(ValidationError::new(violations).into())
+                }
+            }
+        }
+    };
+}
+
+#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
+fn check_range<T: PartialOrd + std::fmt::Display>(
+    v: T,
+    gt: Option<T>,
+    gte: Option<T>,
+    lt: Option<T>,
+    lte: Option<T>,
+    prefix: &str,
+    violations: &mut Vec<Violation>,
+) {
+    match (&gt, &gte, &lt, &lte) {
+        (Some(gt), None, Some(lt), None) => {
+            if *gt < *lt {
+                if v <= *gt || v >= *lt {
+                    violations.push(Violation::new(
+                        "",
+                        format!("{prefix}.gt_lt"),
+                        format!("must be greater than {gt} and less than {lt}"),
+                    ));
+                }
+            } else if v >= *lt && v <= *gt {
+                violations.push(Violation::new(
+                    "",
+                    format!("{prefix}.gt_lt_exclusive"),
+                    format!("must be greater than {gt} or less than {lt}"),
+                ));
+            }
+        }
+        (Some(gt), None, None, Some(lte)) => {
+            if *gt < *lte {
+                if v <= *gt || v > *lte {
+                    violations.push(Violation::new(
+                        "",
+                        format!("{prefix}.gt_lte"),
+                        format!("must be greater than {gt} and less than or equal to {lte}"),
+                    ));
+                }
+            } else if v > *lte && v <= *gt {
+                violations.push(Violation::new(
+                    "",
+                    format!("{prefix}.gt_lte_exclusive"),
+                    format!("must be greater than {gt} or less than or equal to {lte}"),
+                ));
+            }
+        }
+        (None, Some(gte), Some(lt), None) => {
+            if *gte < *lt {
+                if v < *gte || v >= *lt {
+                    violations.push(Violation::new(
+                        "",
+                        format!("{prefix}.gte_lt"),
+                        format!("must be greater than or equal to {gte} and less than {lt}"),
+                    ));
+                }
+            } else if v >= *lt && v < *gte {
+                violations.push(Violation::new(
+                    "",
+                    format!("{prefix}.gte_lt_exclusive"),
+                    format!("must be greater than or equal to {gte} or less than {lt}"),
+                ));
+            }
+        }
+        (None, Some(gte), None, Some(lte)) => {
+            if *gte <= *lte {
+                if v < *gte || v > *lte {
+                    violations.push(Violation::new(
+                        "",
+                        format!("{prefix}.gte_lte"),
+                        format!("must be between {gte} and {lte} inclusive"),
+                    ));
+                }
+            } else if v > *lte && v < *gte {
+                violations.push(Violation::new(
+                    "",
+                    format!("{prefix}.gte_lte_exclusive"),
+                    format!(
+                        "must be greater than or equal to {gte} or less than or equal to {lte}"
+                    ),
+                ));
+            }
+        }
+        (Some(gt), None, None, None) => {
+            if v <= *gt {
+                violations.push(Violation::new(
+                    "",
+                    format!("{prefix}.gt"),
+                    format!("must be greater than {gt}"),
+                ));
+            }
+        }
+        (None, Some(gte), None, None) => {
+            if v < *gte {
+                violations.push(Violation::new(
+                    "",
+                    format!("{prefix}.gte"),
+                    format!("must be greater than or equal to {gte}"),
+                ));
+            }
+        }
+        (None, None, Some(lt), None) => {
+            if v >= *lt {
+                violations.push(Violation::new(
+                    "",
+                    format!("{prefix}.lt"),
+                    format!("must be less than {lt}"),
+                ));
+            }
+        }
+        (None, None, None, Some(lte)) => {
+            if v > *lte {
+                violations.push(Violation::new(
+                    "",
+                    format!("{prefix}.lte"),
+                    format!("must be less than or equal to {lte}"),
+                ));
+            }
+        }
+        _ => {}
+    }
+}
+
+mod numeric_inner {
+    use super::{Error, ValidationError, Violation, check_range};
+
+    pub(super) struct NumericInner<T> {
+        pub r#const: Option<T>,
+        pub lt: Option<T>,
+        pub lte: Option<T>,
+        pub gt: Option<T>,
+        pub gte: Option<T>,
+        pub r#in: Vec<T>,
+        pub not_in: Vec<T>,
+    }
+
+    impl<T: PartialOrd + PartialEq + std::fmt::Display + Copy> NumericInner<T> {
+        pub fn tautology(&self) -> bool {
+            self.r#const.is_none()
+                && self.lt.is_none()
+                && self.lte.is_none()
+                && self.gt.is_none()
+                && self.gte.is_none()
+                && self.r#in.is_empty()
+                && self.not_in.is_empty()
+        }
+
+        pub fn evaluate(&self, v: T, prefix: &str) -> Result<(), Error> {
+            let mut violations = Vec::new();
+
+            if let Some(c) = self.r#const {
+                if v != c {
+                    violations.push(Violation::new(
+                        "",
+                        format!("{prefix}.const"),
+                        format!("must equal {c}"),
+                    ));
+                }
+            }
+
+            check_range(
+                v,
+                self.gt,
+                self.gte,
+                self.lt,
+                self.lte,
+                prefix,
+                &mut violations,
+            );
+
+            if !self.r#in.is_empty() && !self.r#in.contains(&v) {
+                violations.push(Violation::new(
+                    "",
+                    format!("{prefix}.in"),
+                    "must be in list",
+                ));
+            }
+
+            if self.not_in.contains(&v) {
+                violations.push(Violation::new(
+                    "",
+                    format!("{prefix}.not_in"),
+                    "must not be in list",
+                ));
+            }
+
+            if violations.is_empty() {
+                Ok(())
+            } else {
+                Err(ValidationError::new(violations).into())
+            }
+        }
+    }
+}
+
+// Float types
+float_rule_eval!(
+    FloatRuleEval,
+    prost_protovalidate_types::FloatRules,
+    f32,
+    as_f32,
+    float_rules,
+    "float"
+);
+float_rule_eval!(
+    DoubleRuleEval,
+    prost_protovalidate_types::DoubleRules,
+    f64,
+    as_f64,
+    double_rules,
+    "double"
+);
+
+// Integer types
+int_rule_eval!(
+    Int32RuleEval,
+    prost_protovalidate_types::Int32Rules,
+    i32,
+    as_i32,
+    int32_rules,
+    "int32"
+);
+int_rule_eval!(
+    Int64RuleEval,
+    prost_protovalidate_types::Int64Rules,
+    i64,
+    as_i64,
+    int64_rules,
+    "int64"
+);
+int_rule_eval!(
+    UInt32RuleEval,
+    prost_protovalidate_types::UInt32Rules,
+    u32,
+    as_u32,
+    u_int32_rules,
+    "uint32"
+);
+int_rule_eval!(
+    UInt64RuleEval,
+    prost_protovalidate_types::UInt64Rules,
+    u64,
+    as_u64,
+    u_int64_rules,
+    "uint64"
+);
+int_rule_eval!(
+    SInt32RuleEval,
+    prost_protovalidate_types::SInt32Rules,
+    i32,
+    as_i32,
+    s_int32_rules,
+    "sint32"
+);
+int_rule_eval!(
+    SInt64RuleEval,
+    prost_protovalidate_types::SInt64Rules,
+    i64,
+    as_i64,
+    s_int64_rules,
+    "sint64"
+);
+int_rule_eval!(
+    Fixed32RuleEval,
+    prost_protovalidate_types::Fixed32Rules,
+    u32,
+    as_u32,
+    fixed32_rules,
+    "fixed32"
+);
+int_rule_eval!(
+    Fixed64RuleEval,
+    prost_protovalidate_types::Fixed64Rules,
+    u64,
+    as_u64,
+    fixed64_rules,
+    "fixed64"
+);
+int_rule_eval!(
+    SFixed32RuleEval,
+    prost_protovalidate_types::SFixed32Rules,
+    i32,
+    as_i32,
+    s_fixed32_rules,
+    "sfixed32"
+);
+int_rule_eval!(
+    SFixed64RuleEval,
+    prost_protovalidate_types::SFixed64Rules,
+    i64,
+    as_i64,
+    s_fixed64_rules,
+    "sfixed64"
+);

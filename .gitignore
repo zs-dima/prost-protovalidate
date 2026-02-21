@@ -1,0 +1,17 @@
+# Rust
+target/
+**/*.rs.bk
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Test output
+*.profraw
+*.profdata

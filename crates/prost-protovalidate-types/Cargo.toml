@@ -1,0 +1,31 @@
+[package]
+name = "prost-protovalidate-types"
+description = "buf.validate proto types with prost and prost-reflect support"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/prost-protovalidate-types"
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+include = ["src/", "proto/", "build.rs", "LICENSE-*", "README.md"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+prost-reflect = { workspace = true }
+anyhow = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
+prost-reflect-build = { workspace = true }
+
+[lints]
+workspace = true

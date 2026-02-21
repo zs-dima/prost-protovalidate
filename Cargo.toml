@@ -1,0 +1,46 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+exclude = [".github", "bacon.toml", "deny.toml"]
+
+[workspace.package]
+version = "0.1.0"
+authors = ["prost-protovalidate contributors"]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/zs-dima/prost-protovalidate"
+homepage = "https://github.com/zs-dima/prost-protovalidate"
+documentation = "https://docs.rs/prost-protovalidate"
+keywords = ["protobuf", "validation", "prost", "buf", "cel"]
+categories = ["encoding", "development-tools"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+[workspace.dependencies]
+# Proto / gRPC
+prost = "0.14"
+prost-types = "0.14"
+prost-build = "0.14"
+prost-reflect = { version = "0.16", features = ["derive", "serde"] }
+prost-reflect-build = "0.16"
+
+prost-protovalidate-types = { package = "prost-protovalidate-types", path = "crates/prost-protovalidate-types", version = "=0.1.0" }
+prost-protovalidate = { package = "prost-protovalidate", path = "crates/prost-protovalidate", version = "=0.1.0" }
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Utilities
+regex = "1"
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+cel = { version = "0.12", features = ["json", "chrono"] }
+uriparse = "0.6"
