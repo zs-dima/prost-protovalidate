@@ -22,7 +22,7 @@ Use `prost-protovalidate-types` when you only need the generated types or descri
 
 | prost-protovalidate-types | prost | prost-reflect | MSRV |
 | ------------------------- | ----- | ------------- | ---- |
-| 0.1.x                     | 0.14  | 0.16          | 1.85 |
+| 0.1.x                     | 0.14  | 0.16          | 1.86 |
 
 ## License
 
