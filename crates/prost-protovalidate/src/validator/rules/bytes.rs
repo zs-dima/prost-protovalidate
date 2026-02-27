@@ -148,7 +148,7 @@ impl BytesRuleEval {
                 violations.push(Violation::new(
                     "",
                     "bytes.prefix",
-                    format!("value does not have prefix {:?}", prefix),
+                    format!("value does not have prefix {prefix:?}"),
                 ));
             }
         }
@@ -157,7 +157,7 @@ impl BytesRuleEval {
                 violations.push(Violation::new(
                     "",
                     "bytes.suffix",
-                    format!("value does not have suffix {:?}", suffix),
+                    format!("value does not have suffix {suffix:?}"),
                 ));
             }
         }
@@ -167,7 +167,7 @@ impl BytesRuleEval {
                 violations.push(Violation::new(
                     "",
                     "bytes.contains",
-                    format!("value does not contain {:?}", contains),
+                    format!("value does not contain {contains:?}"),
                 ));
             }
         }

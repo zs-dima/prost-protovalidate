@@ -249,8 +249,31 @@ mod tests {
     }
 
     #[test]
+    fn invalid_additional_descriptor_set_never_panics() {
+        let result = std::panic::catch_unwind(|| {
+            let validator = Validator::with_options(&[
+                ValidatorOption::AdditionalDescriptorSetBytes(vec![0x01, 0x02, 0x03]),
+            ]);
+            let msg = prost_protovalidate_types::BoolRules::default();
+            validator.validate(&msg)
+        });
+
+        let validation_result = result.expect("invalid descriptor sets must not panic");
+        match validation_result {
+            Ok(()) => panic!("invalid descriptor set bytes must fail validator initialization"),
+            Err(Error::Compilation(err)) => {
+                assert!(
+                    err.cause
+                        .contains("failed to decode additional descriptor set at index 0")
+                );
+            }
+            Err(other) => panic!("unexpected error type: {other}"),
+        }
+    }
+
+    #[test]
     fn valid_additional_descriptor_set_keeps_validator_operational() {
-        let descriptor_bytes = prost_protovalidate_types::DESCRIPTOR_POOL.encode_to_vec();
+        let descriptor_bytes = Vec::new();
         let validator = Validator::with_options(&[ValidatorOption::AdditionalDescriptorSetBytes(
             descriptor_bytes,
         )]);

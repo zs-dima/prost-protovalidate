@@ -46,7 +46,7 @@ fn extract_fdset_bytes(buf: &[u8]) -> Option<Vec<u8>> {
         let (tag, wire_type) = decode_key(&mut cursor).ok()?;
         match (tag, wire_type) {
             (2, WireType::LengthDelimited) => {
-                let len = decode_varint(&mut cursor).ok()? as usize;
+                let len = usize::try_from(decode_varint(&mut cursor).ok()?).ok()?;
                 if cursor.len() < len {
                     return None;
                 }
@@ -56,7 +56,7 @@ fn extract_fdset_bytes(buf: &[u8]) -> Option<Vec<u8>> {
                 decode_varint(&mut cursor).ok()?;
             }
             (_, WireType::LengthDelimited) => {
-                let len = decode_varint(&mut cursor).ok()? as usize;
+                let len = usize::try_from(decode_varint(&mut cursor).ok()?).ok()?;
                 if cursor.len() < len {
                     return None;
                 }
@@ -103,13 +103,10 @@ fn process_request(
 }
 
 fn build_suite(fdset_bytes: Vec<u8>) -> Result<(DescriptorPool, Validator), String> {
-    panic::catch_unwind(move || {
-        // Start from the library's descriptor pool which already knows about
-        // buf.validate.field/message/oneof extensions. This ensures that when
-        // the test's FileDescriptorSet is decoded, field options containing
-        // these extensions are properly interpreted instead of being stored
-        // as unknown fields.
-        let mut pool = prost_protovalidate_types::DESCRIPTOR_POOL.clone();
+    catch_unwind_silent(move || {
+        // Build a fresh dynamic decode pool from the suite descriptor set only.
+        // Validator extension resolution uses AdditionalDescriptorSetBytes.
+        let mut pool = DescriptorPool::new();
         pool.decode_file_descriptor_set(fdset_bytes.as_slice())
             .map_err(|e| format!("failed to decode descriptor pool: {e}"))?;
         let validator =
@@ -139,7 +136,7 @@ fn run_test_case(
         Err(err) => return runtime_error(format!("failed to decode message: {err}")),
     };
 
-    match panic::catch_unwind(AssertUnwindSafe(|| validator.validate(&dynamic))) {
+    match catch_unwind_silent(|| validator.validate(&dynamic)) {
         Ok(Ok(())) => success(),
         Ok(Err(Error::Validation(err))) => validation_error(err.to_proto()),
         Ok(Err(Error::Compilation(err))) => compilation_error(err.cause),
@@ -201,4 +198,15 @@ fn panic_message(panic: &(dyn Any + Send)) -> String {
     } else {
         "unknown panic".to_string()
     }
+}
+
+fn catch_unwind_silent<F, T>(f: F) -> Result<T, Box<dyn Any + Send>>
+where
+    F: FnOnce() -> T,
+{
+    let hook = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let result = panic::catch_unwind(AssertUnwindSafe(f));
+    panic::set_hook(hook);
+    result
 }

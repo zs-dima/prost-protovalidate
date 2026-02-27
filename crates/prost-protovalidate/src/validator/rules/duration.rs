@@ -98,7 +98,7 @@ impl DurationRuleEval {
         );
 
         if !self.r#in.is_empty() && !self.r#in.iter().any(|d| dur_eq(&dur, d)) {
-            let list: Vec<String> = self.r#in.iter().map(|d| fmt_dur(d)).collect();
+            let list: Vec<String> = self.r#in.iter().map(fmt_dur).collect();
             violations.push(Violation::new(
                 "",
                 "duration.in",
@@ -107,7 +107,7 @@ impl DurationRuleEval {
         }
 
         if self.not_in.iter().any(|d| dur_eq(&dur, d)) {
-            let list: Vec<String> = self.not_in.iter().map(|d| fmt_dur(d)).collect();
+            let list: Vec<String> = self.not_in.iter().map(fmt_dur).collect();
             violations.push(Violation::new(
                 "",
                 "duration.not_in",
