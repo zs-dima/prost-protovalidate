@@ -96,7 +96,11 @@ impl BytesRuleEval {
 
         if let Some(ref c) = self.r#const {
             if b != c.as_slice() {
-                violations.push(Violation::new("", "bytes.const", "must equal const value"));
+                violations.push(Violation::new(
+                    "",
+                    "bytes.const",
+                    format!("value must be {c:?}"),
+                ));
             }
         }
 
@@ -106,7 +110,7 @@ impl BytesRuleEval {
                 violations.push(Violation::new(
                     "",
                     "bytes.len",
-                    format!("must be {expected} bytes"),
+                    format!("value length must be {expected} bytes"),
                 ));
             }
         }
@@ -115,7 +119,7 @@ impl BytesRuleEval {
                 violations.push(Violation::new(
                     "",
                     "bytes.min_len",
-                    format!("must be at least {min} bytes"),
+                    format!("value length must be at least {min} bytes"),
                 ));
             }
         }
@@ -124,7 +128,7 @@ impl BytesRuleEval {
                 violations.push(Violation::new(
                     "",
                     "bytes.max_len",
-                    format!("must be at most {max} bytes"),
+                    format!("value length must be at most {max} bytes"),
                 ));
             }
         }
@@ -134,7 +138,7 @@ impl BytesRuleEval {
                 violations.push(Violation::new(
                     "",
                     "bytes.pattern",
-                    "does not match regex pattern",
+                    format!("value must match regex pattern `{}`", pat.as_str()),
                 ));
             }
         }
@@ -144,7 +148,7 @@ impl BytesRuleEval {
                 violations.push(Violation::new(
                     "",
                     "bytes.prefix",
-                    "does not have expected prefix",
+                    format!("value does not have prefix {:?}", prefix),
                 ));
             }
         }
@@ -153,7 +157,7 @@ impl BytesRuleEval {
                 violations.push(Violation::new(
                     "",
                     "bytes.suffix",
-                    "does not have expected suffix",
+                    format!("value does not have suffix {:?}", suffix),
                 ));
             }
         }
@@ -163,16 +167,20 @@ impl BytesRuleEval {
                 violations.push(Violation::new(
                     "",
                     "bytes.contains",
-                    "does not contain expected bytes",
+                    format!("value does not contain {:?}", contains),
                 ));
             }
         }
 
         if !self.r#in.is_empty() && !self.r#in.contains(b.as_ref()) {
-            violations.push(Violation::new("", "bytes.in", "must be in list"));
+            violations.push(Violation::new("", "bytes.in", "value must be in list"));
         }
         if self.not_in.contains(b.as_ref()) {
-            violations.push(Violation::new("", "bytes.not_in", "must not be in list"));
+            violations.push(Violation::new(
+                "",
+                "bytes.not_in",
+                "value must not be in list",
+            ));
         }
 
         if let Some(wk) = self.well_known {
@@ -188,7 +196,7 @@ impl BytesRuleEval {
                         violations.push(Violation::new(
                             "",
                             "bytes.ip",
-                            "must be a valid IP address (4 or 16 bytes)",
+                            "value must be a valid IP address",
                         ));
                     }
                 }
@@ -203,7 +211,7 @@ impl BytesRuleEval {
                         violations.push(Violation::new(
                             "",
                             "bytes.ipv4",
-                            "must be a valid IPv4 address (4 bytes)",
+                            "value must be a valid IPv4 address",
                         ));
                     }
                 }
@@ -218,7 +226,7 @@ impl BytesRuleEval {
                         violations.push(Violation::new(
                             "",
                             "bytes.ipv6",
-                            "must be a valid IPv6 address (16 bytes)",
+                            "value must be a valid IPv6 address",
                         ));
                     }
                 }
@@ -230,7 +238,11 @@ impl BytesRuleEval {
                             "value is empty, which is not a valid UUID",
                         ));
                     } else if b.len() != 16 {
-                        violations.push(Violation::new("", "bytes.uuid", "must be a valid UUID"));
+                        violations.push(Violation::new(
+                            "",
+                            "bytes.uuid",
+                            "value must be a valid UUID",
+                        ));
                     }
                 }
             }

@@ -195,72 +195,96 @@ fn check_timestamp_range(
         (Some(gt), None, Some(lt), None) => {
             if ts_lt(gt, lt) {
                 if ts_lte(v, gt) || !ts_lt(v, lt) {
-                    violations.push(Violation::new(
-                        "",
-                        "timestamp.gt_lt",
-                        "must be greater than and less than specified timestamps",
-                    ));
+                    violations.push(
+                        Violation::new(
+                            "",
+                            "timestamp.gt_lt",
+                            "must be greater than and less than specified timestamps",
+                        )
+                        .with_rule_path("timestamp.gt"),
+                    );
                 }
             } else if !ts_lt(v, lt) && !ts_gt(v, gt) {
-                violations.push(Violation::new(
-                    "",
-                    "timestamp.gt_lt_exclusive",
-                    "must be greater than or less than specified timestamps",
-                ));
+                violations.push(
+                    Violation::new(
+                        "",
+                        "timestamp.gt_lt_exclusive",
+                        "must be greater than or less than specified timestamps",
+                    )
+                    .with_rule_path("timestamp.gt"),
+                );
             }
         }
         // gt + lte
         (Some(gt), None, None, Some(lte)) => {
             if ts_lt(gt, lte) {
                 if ts_lte(v, gt) || ts_gt(v, lte) {
-                    violations.push(Violation::new(
-                        "",
-                        "timestamp.gt_lte",
-                        "must be greater than and less than or equal to specified timestamps",
-                    ));
+                    violations.push(
+                        Violation::new(
+                            "",
+                            "timestamp.gt_lte",
+                            "must be greater than and less than or equal to specified timestamps",
+                        )
+                        .with_rule_path("timestamp.gt"),
+                    );
                 }
             } else if ts_gt(v, lte) && ts_lte(v, gt) {
-                violations.push(Violation::new(
-                    "",
-                    "timestamp.gt_lte_exclusive",
-                    "must be greater than or less than or equal to specified timestamps",
-                ));
+                violations.push(
+                    Violation::new(
+                        "",
+                        "timestamp.gt_lte_exclusive",
+                        "must be greater than or less than or equal to specified timestamps",
+                    )
+                    .with_rule_path("timestamp.gt"),
+                );
             }
         }
         // gte + lt
         (None, Some(gte), Some(lt), None) => {
             if ts_lt(gte, lt) {
                 if ts_lt(v, gte) || !ts_lt(v, lt) {
-                    violations.push(Violation::new(
-                        "",
-                        "timestamp.gte_lt",
-                        "must be greater than or equal to and less than specified timestamps",
-                    ));
+                    violations.push(
+                        Violation::new(
+                            "",
+                            "timestamp.gte_lt",
+                            "must be greater than or equal to and less than specified timestamps",
+                        )
+                        .with_rule_path("timestamp.gte"),
+                    );
                 }
             } else if !ts_lt(v, lt) && ts_lt(v, gte) {
-                violations.push(Violation::new(
-                    "",
-                    "timestamp.gte_lt_exclusive",
-                    "must be greater than or equal to or less than specified timestamps",
-                ));
+                violations.push(
+                    Violation::new(
+                        "",
+                        "timestamp.gte_lt_exclusive",
+                        "must be greater than or equal to or less than specified timestamps",
+                    )
+                    .with_rule_path("timestamp.gte"),
+                );
             }
         }
         // gte + lte
         (None, Some(gte), None, Some(lte)) => {
             if ts_lte(gte, lte) {
                 if ts_lt(v, gte) || ts_gt(v, lte) {
-                    violations.push(Violation::new(
-                        "",
-                        "timestamp.gte_lte",
-                        "must be between specified timestamps inclusive",
-                    ));
+                    violations.push(
+                        Violation::new(
+                            "",
+                            "timestamp.gte_lte",
+                            "must be between specified timestamps inclusive",
+                        )
+                        .with_rule_path("timestamp.gte"),
+                    );
                 }
             } else if ts_gt(v, lte) && ts_lt(v, gte) {
-                violations.push(Violation::new(
-                    "",
-                    "timestamp.gte_lte_exclusive",
-                    "must be greater than or equal to or less than or equal to specified timestamps",
-                ));
+                violations.push(
+                    Violation::new(
+                        "",
+                        "timestamp.gte_lte_exclusive",
+                        "must be greater than or equal to or less than or equal to specified timestamps",
+                    )
+                    .with_rule_path("timestamp.gte"),
+                );
             }
         }
         // single bounds

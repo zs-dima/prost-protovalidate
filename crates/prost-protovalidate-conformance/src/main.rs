@@ -20,22 +20,73 @@ fn main() {
         .read_to_end(&mut input)
         .expect("failed to read stdin");
 
+    // Extract the raw fdset bytes (field 2) from the wire format BEFORE prost
+    // decodes the request. prost_types::FileDescriptorSet drops extension data
+    // (unknown fields) when decoding nested FieldOptions, so we must avoid
+    // round-tripping the fdset through prost.
+    let fdset_bytes = extract_fdset_bytes(&input);
+
     let request = harness::TestConformanceRequest::decode(input.as_slice())
         .expect("failed to decode TestConformanceRequest");
 
-    let response = process_request(&request);
+    let response = process_request(&request, fdset_bytes);
 
     io::stdout()
         .write_all(&response.encode_to_vec())
         .expect("failed to write stdout");
 }
 
-fn process_request(request: &harness::TestConformanceRequest) -> harness::TestConformanceResponse {
-    let Some(fdset) = request.fdset.as_ref() else {
+/// Extract raw bytes of the `fdset` field (field number 2, wire type LEN)
+/// from a protobuf-encoded `TestConformanceRequest` without decoding nested
+/// messages. This preserves extension data that `prost_types` would drop.
+fn extract_fdset_bytes(buf: &[u8]) -> Option<Vec<u8>> {
+    use prost::encoding::{WireType, decode_key, decode_varint};
+    let mut cursor = buf;
+    while !cursor.is_empty() {
+        let (tag, wire_type) = decode_key(&mut cursor).ok()?;
+        match (tag, wire_type) {
+            (2, WireType::LengthDelimited) => {
+                let len = decode_varint(&mut cursor).ok()? as usize;
+                if cursor.len() < len {
+                    return None;
+                }
+                return Some(cursor[..len].to_vec());
+            }
+            (_, WireType::Varint) => {
+                decode_varint(&mut cursor).ok()?;
+            }
+            (_, WireType::LengthDelimited) => {
+                let len = decode_varint(&mut cursor).ok()? as usize;
+                if cursor.len() < len {
+                    return None;
+                }
+                cursor = &cursor[len..];
+            }
+            (_, WireType::ThirtyTwoBit) => {
+                if cursor.len() < 4 {
+                    return None;
+                }
+                cursor = &cursor[4..];
+            }
+            (_, WireType::SixtyFourBit) => {
+                if cursor.len() < 8 {
+                    return None;
+                }
+                cursor = &cursor[8..];
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn process_request(
+    request: &harness::TestConformanceRequest,
+    fdset_bytes: Option<Vec<u8>>,
+) -> harness::TestConformanceResponse {
+    let Some(fdset_bytes) = fdset_bytes else {
         return all_unexpected(&request.cases, "missing fdset in request");
     };
-
-    let fdset_bytes = fdset.encode_to_vec();
 
     let (pool, validator) = match build_suite(fdset_bytes) {
         Ok(pair) => pair,
@@ -53,7 +104,13 @@ fn process_request(request: &harness::TestConformanceRequest) -> harness::TestCo
 
 fn build_suite(fdset_bytes: Vec<u8>) -> Result<(DescriptorPool, Validator), String> {
     panic::catch_unwind(move || {
-        let pool = DescriptorPool::decode(fdset_bytes.as_slice())
+        // Start from the library's descriptor pool which already knows about
+        // buf.validate.field/message/oneof extensions. This ensures that when
+        // the test's FileDescriptorSet is decoded, field options containing
+        // these extensions are properly interpreted instead of being stored
+        // as unknown fields.
+        let mut pool = prost_protovalidate_types::DESCRIPTOR_POOL.clone();
+        pool.decode_file_descriptor_set(fdset_bytes.as_slice())
             .map_err(|e| format!("failed to decode descriptor pool: {e}"))?;
         let validator =
             Validator::with_options(&[ValidatorOption::AdditionalDescriptorSetBytes(fdset_bytes)]);

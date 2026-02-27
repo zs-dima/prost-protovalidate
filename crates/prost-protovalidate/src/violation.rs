@@ -1,7 +1,15 @@
 use std::fmt;
+use std::sync::LazyLock;
 
 use prost_protovalidate_types::{FieldPath, FieldPathElement, field_path_element};
-use prost_reflect::{FieldDescriptor, Kind, Value};
+use prost_reflect::{FieldDescriptor, Kind, MessageDescriptor, Value};
+
+/// Cached `FieldRules` message descriptor for hydrating rule paths.
+static FIELD_RULES_DESCRIPTOR: LazyLock<MessageDescriptor> = LazyLock::new(|| {
+    prost_protovalidate_types::DESCRIPTOR_POOL
+        .get_message_by_name("buf.validate.FieldRules")
+        .expect("FieldRules descriptor must exist")
+});
 
 /// A single instance where a validation rule was not met.
 #[derive(Debug, Clone)]
@@ -62,6 +70,7 @@ impl Violation {
             self.proto.field = parse_path(&self.field_path);
         }
         self.proto.rule = parse_path(&self.rule_path);
+        hydrate_rule_path(&mut self.proto.rule);
         self.proto.rule_id = if self.rule_id.is_empty() {
             None
         } else {
@@ -405,6 +414,32 @@ fn parse_subscript(token: &str) -> Option<field_path_element::Subscript> {
     None
 }
 
+/// Resolve each element of a rule [`FieldPath`] against the `FieldRules`
+/// descriptor chain, populating `field_number` and `field_type`.
+fn hydrate_rule_path(path: &mut Option<FieldPath>) {
+    let Some(path) = path.as_mut() else {
+        return;
+    };
+    let mut descriptor: MessageDescriptor = FIELD_RULES_DESCRIPTOR.clone();
+    for element in &mut path.elements {
+        let Some(name) = element.field_name.as_deref() else {
+            continue;
+        };
+        let Some(field) = descriptor.get_field_by_name(name) else {
+            break;
+        };
+        element.field_number = i32::try_from(field.number()).ok();
+        element.field_type = if field.is_group() {
+            Some(prost_types::field_descriptor_proto::Type::Group as i32)
+        } else {
+            Some(kind_to_descriptor_type(&field.kind()) as i32)
+        };
+        if let Some(msg) = field.kind().as_message() {
+            descriptor = msg.clone();
+        }
+    }
+}
+
 fn field_path_string(path: Option<&FieldPath>) -> String {
     let Some(path) = path else {
         return String::new();
@@ -543,5 +578,54 @@ mod tests {
 
         let unknown = Violation::new("", "", "");
         assert_eq!(unknown.to_string(), "[unknown]");
+    }
+
+    #[test]
+    fn hydrate_rule_path_populates_field_number_and_type() {
+        let violation = Violation::new("val", "int32.const", "must equal 1");
+        let rule = violation
+            .proto
+            .rule
+            .as_ref()
+            .expect("rule path should be populated");
+
+        assert_eq!(rule.elements.len(), 2);
+
+        let first = &rule.elements[0];
+        assert_eq!(first.field_name.as_deref(), Some("int32"));
+        assert!(
+            first.field_number.is_some(),
+            "int32 element must have field_number"
+        );
+        assert!(
+            first.field_type.is_some(),
+            "int32 element must have field_type"
+        );
+
+        let second = &rule.elements[1];
+        assert_eq!(second.field_name.as_deref(), Some("const"));
+        assert!(
+            second.field_number.is_some(),
+            "const element must have field_number"
+        );
+        assert!(
+            second.field_type.is_some(),
+            "const element must have field_type"
+        );
+    }
+
+    #[test]
+    fn hydrate_rule_path_handles_unknown_names_gracefully() {
+        let violation = Violation::new("val", "nonexistent.field", "message");
+        let rule = violation
+            .proto
+            .rule
+            .as_ref()
+            .expect("rule path should be populated");
+
+        // First element is unknown, so it should NOT be hydrated
+        let first = &rule.elements[0];
+        assert_eq!(first.field_name.as_deref(), Some("nonexistent"));
+        assert_eq!(first.field_number, None);
     }
 }

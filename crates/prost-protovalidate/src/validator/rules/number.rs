@@ -9,6 +9,7 @@ macro_rules! float_rule_eval {
     ($name:ident, $rules_ty:ty, $value_ty:ty, $extract_method:ident, $rules_mod:ident, $prefix:literal) => {
         pub(crate) struct $name {
             inner: numeric_inner::NumericInner<$value_ty>,
+            finite: bool,
         }
 
         impl $name {
@@ -35,11 +36,12 @@ macro_rules! float_rule_eval {
                         r#in: rules.r#in.clone(),
                         not_in: rules.not_in.clone(),
                     },
+                    finite: rules.finite.unwrap_or(false),
                 }
             }
 
             pub fn tautology(&self) -> bool {
-                self.inner.tautology()
+                !self.finite && self.inner.tautology()
             }
 
             pub fn evaluate(
@@ -51,6 +53,15 @@ macro_rules! float_rule_eval {
                     Some(v) => v as $value_ty,
                     None => return Ok(()),
                 };
+                // Check finite constraint first
+                if self.finite && (v.is_nan() || v.is_infinite()) {
+                    return Err(ValidationError::new(vec![Violation::new(
+                        "",
+                        concat!($prefix, ".finite"),
+                        "value must be finite",
+                    )])
+                    .into());
+                }
                 self.inner.evaluate(v, $prefix)
             }
         }
@@ -122,7 +133,7 @@ macro_rules! int_rule_eval {
                         violations.push(Violation::new(
                             "",
                             concat!($prefix, ".const"),
-                            format!("must equal {c}"),
+                            format!("value must equal {c}"),
                         ));
                     }
                 }
@@ -141,7 +152,7 @@ macro_rules! int_rule_eval {
                     violations.push(Violation::new(
                         "",
                         concat!($prefix, ".in"),
-                        "must be in list",
+                        "value must be in list",
                     ));
                 }
 
@@ -149,7 +160,7 @@ macro_rules! int_rule_eval {
                     violations.push(Violation::new(
                         "",
                         concat!($prefix, ".not_in"),
-                        "must not be in list",
+                        "value must not be in list",
                     ));
                 }
 
@@ -177,71 +188,99 @@ fn check_range<T: PartialOrd + std::fmt::Display>(
         (Some(gt), None, Some(lt), None) => {
             if *gt < *lt {
                 if v <= *gt || v >= *lt {
-                    violations.push(Violation::new(
-                        "",
-                        format!("{prefix}.gt_lt"),
-                        format!("must be greater than {gt} and less than {lt}"),
-                    ));
+                    violations.push(
+                        Violation::new(
+                            "",
+                            format!("{prefix}.gt_lt"),
+                            format!("value must be greater than {gt} and less than {lt}"),
+                        )
+                        .with_rule_path(format!("{prefix}.gt")),
+                    );
                 }
             } else if v >= *lt && v <= *gt {
-                violations.push(Violation::new(
-                    "",
-                    format!("{prefix}.gt_lt_exclusive"),
-                    format!("must be greater than {gt} or less than {lt}"),
-                ));
+                violations.push(
+                    Violation::new(
+                        "",
+                        format!("{prefix}.gt_lt_exclusive"),
+                        format!("value must be greater than {gt} or less than {lt}"),
+                    )
+                    .with_rule_path(format!("{prefix}.gt")),
+                );
             }
         }
         (Some(gt), None, None, Some(lte)) => {
             if *gt < *lte {
                 if v <= *gt || v > *lte {
-                    violations.push(Violation::new(
-                        "",
-                        format!("{prefix}.gt_lte"),
-                        format!("must be greater than {gt} and less than or equal to {lte}"),
-                    ));
+                    violations.push(
+                        Violation::new(
+                            "",
+                            format!("{prefix}.gt_lte"),
+                            format!(
+                                "value must be greater than {gt} and less than or equal to {lte}"
+                            ),
+                        )
+                        .with_rule_path(format!("{prefix}.gt")),
+                    );
                 }
             } else if v > *lte && v <= *gt {
-                violations.push(Violation::new(
-                    "",
-                    format!("{prefix}.gt_lte_exclusive"),
-                    format!("must be greater than {gt} or less than or equal to {lte}"),
-                ));
+                violations.push(
+                    Violation::new(
+                        "",
+                        format!("{prefix}.gt_lte_exclusive"),
+                        format!("value must be greater than {gt} or less than or equal to {lte}"),
+                    )
+                    .with_rule_path(format!("{prefix}.gt")),
+                );
             }
         }
         (None, Some(gte), Some(lt), None) => {
             if *gte < *lt {
                 if v < *gte || v >= *lt {
-                    violations.push(Violation::new(
-                        "",
-                        format!("{prefix}.gte_lt"),
-                        format!("must be greater than or equal to {gte} and less than {lt}"),
-                    ));
+                    violations.push(
+                        Violation::new(
+                            "",
+                            format!("{prefix}.gte_lt"),
+                            format!(
+                                "value must be greater than or equal to {gte} and less than {lt}"
+                            ),
+                        )
+                        .with_rule_path(format!("{prefix}.gte")),
+                    );
                 }
             } else if v >= *lt && v < *gte {
-                violations.push(Violation::new(
-                    "",
-                    format!("{prefix}.gte_lt_exclusive"),
-                    format!("must be greater than or equal to {gte} or less than {lt}"),
-                ));
+                violations.push(
+                    Violation::new(
+                        "",
+                        format!("{prefix}.gte_lt_exclusive"),
+                        format!("value must be greater than or equal to {gte} or less than {lt}"),
+                    )
+                    .with_rule_path(format!("{prefix}.gte")),
+                );
             }
         }
         (None, Some(gte), None, Some(lte)) => {
             if *gte <= *lte {
                 if v < *gte || v > *lte {
-                    violations.push(Violation::new(
-                        "",
-                        format!("{prefix}.gte_lte"),
-                        format!("must be between {gte} and {lte} inclusive"),
-                    ));
+                    violations.push(
+                        Violation::new(
+                            "",
+                            format!("{prefix}.gte_lte"),
+                            format!("value must be greater than or equal to {gte} and less than or equal to {lte}"),
+                        )
+                        .with_rule_path(format!("{prefix}.gte")),
+                    );
                 }
             } else if v > *lte && v < *gte {
-                violations.push(Violation::new(
-                    "",
-                    format!("{prefix}.gte_lte_exclusive"),
-                    format!(
-                        "must be greater than or equal to {gte} or less than or equal to {lte}"
-                    ),
-                ));
+                violations.push(
+                    Violation::new(
+                        "",
+                        format!("{prefix}.gte_lte_exclusive"),
+                        format!(
+                            "value must be greater than or equal to {gte} or less than or equal to {lte}"
+                        ),
+                    )
+                    .with_rule_path(format!("{prefix}.gte")),
+                );
             }
         }
         (Some(gt), None, None, None) => {
@@ -249,7 +288,7 @@ fn check_range<T: PartialOrd + std::fmt::Display>(
                 violations.push(Violation::new(
                     "",
                     format!("{prefix}.gt"),
-                    format!("must be greater than {gt}"),
+                    format!("value must be greater than {gt}"),
                 ));
             }
         }
@@ -258,7 +297,7 @@ fn check_range<T: PartialOrd + std::fmt::Display>(
                 violations.push(Violation::new(
                     "",
                     format!("{prefix}.gte"),
-                    format!("must be greater than or equal to {gte}"),
+                    format!("value must be greater than or equal to {gte}"),
                 ));
             }
         }
@@ -267,7 +306,7 @@ fn check_range<T: PartialOrd + std::fmt::Display>(
                 violations.push(Violation::new(
                     "",
                     format!("{prefix}.lt"),
-                    format!("must be less than {lt}"),
+                    format!("value must be less than {lt}"),
                 ));
             }
         }
@@ -276,7 +315,7 @@ fn check_range<T: PartialOrd + std::fmt::Display>(
                 violations.push(Violation::new(
                     "",
                     format!("{prefix}.lte"),
-                    format!("must be less than or equal to {lte}"),
+                    format!("value must be less than or equal to {lte}"),
                 ));
             }
         }
@@ -316,7 +355,7 @@ mod numeric_inner {
                     violations.push(Violation::new(
                         "",
                         format!("{prefix}.const"),
-                        format!("must equal {c}"),
+                        format!("value must equal {c}"),
                     ));
                 }
             }
@@ -335,7 +374,7 @@ mod numeric_inner {
                 violations.push(Violation::new(
                     "",
                     format!("{prefix}.in"),
-                    "must be in list",
+                    "value must be in list",
                 ));
             }
 
@@ -343,7 +382,7 @@ mod numeric_inner {
                 violations.push(Violation::new(
                     "",
                     format!("{prefix}.not_in"),
-                    "must not be in list",
+                    "value must not be in list",
                 ));
             }
 
