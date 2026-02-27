@@ -80,6 +80,28 @@ validator.validate(&request)?;
 | ------------------- | ----- | ------------- | ---- |
 | 0.1.x               | 0.14  | 0.16          | 1.86 |
 
+## Conformance
+
+Conformance uses a pinned upstream harness from
+`github.com/bufbuild/protovalidate/tools/protovalidate-conformance`.
+
+Pinned versions are defined in the repository root `Makefile`:
+
+- `PROTOVALIDATE_TOOLS_VERSION`
+- `PROTOVALIDATE_SCHEMA_REF`
+
+### Upgrade playbook
+
+1. Bump `PROTOVALIDATE_TOOLS_VERSION` and `PROTOVALIDATE_SCHEMA_REF` in `Makefile`.
+2. Sync `validate.proto` using the workflow in
+   `crates/prost-protovalidate-types/SYNC.md`.
+3. Refresh and validate conformance:
+   - `make conformance-refresh-expected`
+   - `make conformance`
+4. Run regression tests:
+   - `cargo test --all-features`
+5. Commit version bump and `expected_failures.yaml` changes together.
+
 ## License
 
 [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE)

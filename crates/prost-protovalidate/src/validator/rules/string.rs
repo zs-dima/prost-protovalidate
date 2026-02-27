@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::str::FromStr;
 
 use regex::Regex;
@@ -17,12 +18,10 @@ static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static ULID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[0-7][0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{25}$").expect("ulid regex must compile")
 });
-#[cfg(test)]
 static PROTOBUF_FQN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[A-Za-z_][A-Za-z_0-9]*(\\.[A-Za-z_][A-Za-z_0-9]*)*$")
         .expect("protobuf fqn regex must compile")
 });
-#[cfg(test)]
 static PROTOBUF_DOT_FQN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^\\.[A-Za-z_][A-Za-z_0-9]*(\\.[A-Za-z_][A-Za-z_0-9]*)*$")
         .expect("protobuf dot fqn regex must compile")
@@ -81,6 +80,8 @@ enum WellKnownStringRule {
     Ipv6Prefix,
     HostAndPort,
     Ulid,
+    ProtobufFqn,
+    ProtobufDotFqn,
     HttpHeaderName,
     HttpHeaderValue,
 }
@@ -326,6 +327,8 @@ fn parse_well_known_string_rule(
         WellKnown::Ipv6Prefix(true) => Some(WellKnownStringRule::Ipv6Prefix),
         WellKnown::HostAndPort(true) => Some(WellKnownStringRule::HostAndPort),
         WellKnown::Ulid(true) => Some(WellKnownStringRule::Ulid),
+        WellKnown::ProtobufFqn(true) => Some(WellKnownStringRule::ProtobufFqn),
+        WellKnown::ProtobufDotFqn(true) => Some(WellKnownStringRule::ProtobufDotFqn),
         WellKnown::WellKnownRegex(v) => match prost_protovalidate_types::KnownRegex::try_from(*v) {
             Ok(prost_protovalidate_types::KnownRegex::HttpHeaderName) => {
                 Some(WellKnownStringRule::HttpHeaderName)
@@ -357,7 +360,9 @@ fn parse_well_known_string_rule(
         | WellKnown::Ipv4Prefix(false)
         | WellKnown::Ipv6Prefix(false)
         | WellKnown::HostAndPort(false)
-        | WellKnown::Ulid(false) => None,
+        | WellKnown::Ulid(false)
+        | WellKnown::ProtobufFqn(false)
+        | WellKnown::ProtobufDotFqn(false) => None,
     };
 
     Ok(parsed)
@@ -613,6 +618,42 @@ fn check_well_known(s: &str, rule: WellKnownStringRule, strict: bool) -> Option<
                 return Some(Violation::new("", "string.ulid", "must be a valid ULID"));
             }
         }
+        WellKnownStringRule::ProtobufFqn => {
+            if s.is_empty() {
+                return Some(
+                    Violation::new(
+                        "",
+                        "string.protobuf_fqn_empty",
+                        "value is empty, which is not a valid fully-qualified Protobuf name",
+                    )
+                    .with_rule_path("string.protobuf_fqn"),
+                );
+            }
+            if !is_protobuf_fqn(s) {
+                return Some(Violation::new(
+                    "",
+                    "string.protobuf_fqn",
+                    "must be a valid fully-qualified Protobuf name",
+                ));
+            }
+        }
+        WellKnownStringRule::ProtobufDotFqn => {
+            if s.is_empty() {
+                return Some(Violation::new(
+                    "",
+                    "string.protobuf_dot_fqn_empty",
+                    "value is empty, which is not a valid fully-qualified Protobuf name with a leading dot",
+                )
+                .with_rule_path("string.protobuf_dot_fqn"));
+            }
+            if !is_protobuf_dot_fqn(s) {
+                return Some(Violation::new(
+                    "",
+                    "string.protobuf_dot_fqn",
+                    "must be a valid fully-qualified Protobuf name with a leading dot",
+                ));
+            }
+        }
         WellKnownStringRule::HttpHeaderName => {
             if s.is_empty() {
                 return Some(Violation::new(
@@ -696,11 +737,38 @@ pub(crate) fn is_ipv6(s: &str) -> bool {
 }
 
 pub(crate) fn is_uri(s: &str) -> bool {
-    URI::try_from(s).is_ok()
+    if has_invalid_uri_scheme_prefix(s) {
+        return false;
+    }
+    catch_unwind(AssertUnwindSafe(|| URI::try_from(s).is_ok())).unwrap_or(false)
 }
 
 pub(crate) fn is_uri_ref(s: &str) -> bool {
-    URIReference::try_from(s).is_ok()
+    if has_invalid_uri_scheme_prefix(s) {
+        return false;
+    }
+    catch_unwind(AssertUnwindSafe(|| URIReference::try_from(s).is_ok())).unwrap_or(false)
+}
+
+fn has_invalid_uri_scheme_prefix(s: &str) -> bool {
+    let Some(scheme_end) = s.find(':') else {
+        return false;
+    };
+
+    let first_hier_delim = s.find(|c| ['/', '?', '#'].contains(&c));
+    if first_hier_delim.is_some_and(|idx| idx < scheme_end) {
+        return false;
+    }
+
+    let scheme = &s[..scheme_end];
+    let mut bytes = scheme.bytes();
+    let Some(first) = bytes.next() else {
+        return true;
+    };
+    if !first.is_ascii_alphabetic() {
+        return true;
+    }
+    !bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
 }
 
 fn is_uuid(s: &str) -> bool {
@@ -729,12 +797,10 @@ fn is_ulid(s: &str) -> bool {
     ULID_REGEX.is_match(s)
 }
 
-#[cfg(test)]
 fn is_protobuf_fqn(s: &str) -> bool {
     PROTOBUF_FQN_REGEX.is_match(s)
 }
 
-#[cfg(test)]
 fn is_protobuf_dot_fqn(s: &str) -> bool {
     PROTOBUF_DOT_FQN_REGEX.is_match(s)
 }
@@ -880,8 +946,8 @@ fn is_port(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        IpVersion, StringRuleEval, is_host_and_port, is_ip_prefix, is_protobuf_dot_fqn,
-        is_protobuf_fqn, is_tuuid, is_ulid, is_uri_ref,
+        IpVersion, StringRuleEval, WellKnownStringRule, check_well_known, is_host_and_port,
+        is_ip_prefix, is_protobuf_dot_fqn, is_protobuf_fqn, is_tuuid, is_ulid, is_uri, is_uri_ref,
     };
     use prost_protovalidate_types::{StringRules, string_rules::WellKnown};
 
@@ -923,6 +989,60 @@ mod tests {
 
         assert!(is_protobuf_dot_fqn(".google.protobuf.Timestamp"));
         assert!(!is_protobuf_dot_fqn("google.protobuf.Timestamp"));
+    }
+
+    #[test]
+    fn protobuf_fqn_and_dot_fqn_patterns_match_conformance_cases() {
+        assert!(is_protobuf_fqn("buf.validate"));
+        assert!(is_protobuf_fqn("my_package.MyMessage"));
+        assert!(is_protobuf_fqn("_any_Crazy_CASE_with_01234_numbers"));
+        assert!(is_protobuf_fqn("c3p0"));
+        assert!(!is_protobuf_fqn(""));
+        assert!(!is_protobuf_fqn(".x"));
+        assert!(!is_protobuf_fqn("x."));
+        assert!(!is_protobuf_fqn("a..b"));
+        assert!(!is_protobuf_fqn("1a"));
+        assert!(!is_protobuf_fqn("a$"));
+
+        assert!(is_protobuf_dot_fqn(".buf.validate"));
+        assert!(is_protobuf_dot_fqn(".my_package.MyMessage"));
+        assert!(is_protobuf_dot_fqn("._any_Crazy_CASE_with_01234_numbers"));
+        assert!(!is_protobuf_dot_fqn(""));
+        assert!(!is_protobuf_dot_fqn(".x."));
+        assert!(!is_protobuf_dot_fqn(".a..b"));
+        assert!(!is_protobuf_dot_fqn(".1a"));
+        assert!(!is_protobuf_dot_fqn(".a$"));
+    }
+
+    #[test]
+    fn uri_helpers_never_panic_on_malformed_inputs() {
+        let panic_inputs = [
+            ".foo://example.com",
+            "-foo://example.com",
+            ":foo://example.com",
+            "foo%20bar://example.com",
+        ];
+
+        for input in panic_inputs {
+            assert!(!is_uri(input), "is_uri must be panic-safe for {input:?}");
+            assert!(
+                !is_uri_ref(input),
+                "is_uri_ref must be panic-safe for {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn protobuf_empty_violations_keep_base_rule_path() {
+        let fqn = check_well_known("", WellKnownStringRule::ProtobufFqn, true)
+            .expect("protobuf_fqn empty should violate");
+        assert_eq!(fqn.rule_id, "string.protobuf_fqn_empty");
+        assert_eq!(fqn.rule_path, "string.protobuf_fqn");
+
+        let dot_fqn = check_well_known("", WellKnownStringRule::ProtobufDotFqn, true)
+            .expect("protobuf_dot_fqn empty should violate");
+        assert_eq!(dot_fqn.rule_id, "string.protobuf_dot_fqn_empty");
+        assert_eq!(dot_fqn.rule_path, "string.protobuf_dot_fqn");
     }
 
     #[test]

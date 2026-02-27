@@ -1,5 +1,6 @@
 .PHONY: fmt fmt-check lint test check doc pre-commit publish-dry publish clean \
-       conformance-install conformance-build conformance conformance-verbose
+       conformance-build conformance-harness conformance conformance-verbose \
+       conformance-refresh-expected
 
 fmt:
 	cargo fmt --all
@@ -34,22 +35,38 @@ publish:
 	@sleep 30
 	cargo publish -p prost-protovalidate
 
-# Conformance tests (requires Go: go install github.com/bufbuild/protovalidate/tools/protovalidate-conformance@v1.1.1)
-CONFORMANCE_HARNESS ?= $(shell go env GOPATH)/bin/protovalidate-conformance
+# Pinned upstream versions for conformance tooling and schema sync docs.
+PROTOVALIDATE_TOOLS_VERSION ?= v1.1.1
+PROTOVALIDATE_SCHEMA_REF ?= v1.1.1
+
+# Conformance tests use a pinned upstream protovalidate harness binary.
+CONFORMANCE_HARNESS = target/protovalidate-conformance$(shell go env GOEXE)
 CONFORMANCE_EXECUTOR = target/release/prost-protovalidate-conformance
 EXPECTED_FAILURES = crates/prost-protovalidate-conformance/expected_failures.yaml
 
-conformance-install:
-	go install github.com/bufbuild/protovalidate/tools/protovalidate-conformance@v1.1.1
+ifeq ($(OS),Windows_NT)
+GO_INSTALL_CONFORMANCE = set "GOBIN=$(abspath target)" && go install github.com/bufbuild/protovalidate/tools/protovalidate-conformance@$(PROTOVALIDATE_TOOLS_VERSION)
+else
+GO_INSTALL_CONFORMANCE = GOBIN=$(abspath target) go install github.com/bufbuild/protovalidate/tools/protovalidate-conformance@$(PROTOVALIDATE_TOOLS_VERSION)
+endif
 
 conformance-build:
 	cargo build --release -p prost-protovalidate-conformance
 
-conformance: conformance-build
+conformance-harness:
+	$(GO_INSTALL_CONFORMANCE)
+
+conformance: conformance-build conformance-harness
 	$(CONFORMANCE_HARNESS) --expected_failures $(EXPECTED_FAILURES) $(CONFORMANCE_EXECUTOR)
 
-conformance-verbose: conformance-build
+conformance-verbose: conformance-build conformance-harness
 	$(CONFORMANCE_HARNESS) --expected_failures $(EXPECTED_FAILURES) -v $(CONFORMANCE_EXECUTOR)
+
+conformance-refresh-expected: conformance-build conformance-harness
+	go run ./scripts/update_expected_failures.go \
+		--harness $(CONFORMANCE_HARNESS) \
+		--executor $(CONFORMANCE_EXECUTOR) \
+		--expected $(EXPECTED_FAILURES)
 
 clean:
 	cargo clean

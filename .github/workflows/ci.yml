@@ -80,12 +80,7 @@ jobs:
         with:
           go-version: stable
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-      - run: go install github.com/bufbuild/protovalidate/tools/protovalidate-conformance@v1.1.1
-      - run: cargo build --release -p prost-protovalidate-conformance
-      - run: >-
-          $(go env GOPATH)/bin/protovalidate-conformance
-          --expected_failures crates/prost-protovalidate-conformance/expected_failures.yaml
-          ./target/release/prost-protovalidate-conformance
+      - run: make conformance
 
   semver:
     name: SemVer Checks
