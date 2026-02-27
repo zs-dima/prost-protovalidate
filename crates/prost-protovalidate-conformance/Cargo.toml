@@ -1,0 +1,26 @@
+[package]
+name = "prost-protovalidate-conformance"
+description = "Conformance test executor for prost-protovalidate"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "prost-protovalidate-conformance"
+path = "src/main.rs"
+
+[dependencies]
+prost-protovalidate = { workspace = true }
+prost-protovalidate-types = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+prost-reflect = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
+
+[lints]
+workspace = true

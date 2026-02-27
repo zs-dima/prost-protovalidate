@@ -69,6 +69,24 @@ jobs:
         with:
           command: check
 
+  conformance:
+    name: Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: sudo apt-get install -y protobuf-compiler
+      - run: go install github.com/bufbuild/protovalidate/tools/protovalidate-conformance@v1.1.1
+      - run: cargo build --release -p prost-protovalidate-conformance
+      - run: >-
+          $(go env GOPATH)/bin/protovalidate-conformance
+          --expected_failures crates/prost-protovalidate-conformance/expected_failures.yaml
+          ./target/release/prost-protovalidate-conformance
+
   semver:
     name: SemVer Checks
     runs-on: ubuntu-latest

@@ -1,4 +1,5 @@
-.PHONY: fmt fmt-check lint test check doc pre-commit publish-dry publish clean
+.PHONY: fmt fmt-check lint test check doc pre-commit publish-dry publish clean \
+       conformance-install conformance-build conformance conformance-verbose
 
 fmt:
 	cargo fmt --all
@@ -32,6 +33,23 @@ publish:
 	@echo "Waiting for crates.io index to update..."
 	@sleep 30
 	cargo publish -p prost-protovalidate
+
+# Conformance tests (requires Go: go install github.com/bufbuild/protovalidate/tools/protovalidate-conformance@v1.1.1)
+CONFORMANCE_HARNESS ?= $(shell go env GOPATH)/bin/protovalidate-conformance
+CONFORMANCE_EXECUTOR = target/release/prost-protovalidate-conformance
+EXPECTED_FAILURES = crates/prost-protovalidate-conformance/expected_failures.yaml
+
+conformance-install:
+	go install github.com/bufbuild/protovalidate/tools/protovalidate-conformance@v1.1.1
+
+conformance-build:
+	cargo build --release -p prost-protovalidate-conformance
+
+conformance: conformance-build
+	$(CONFORMANCE_HARNESS) --expected_failures $(EXPECTED_FAILURES) $(CONFORMANCE_EXECUTOR)
+
+conformance-verbose: conformance-build
+	$(CONFORMANCE_HARNESS) --expected_failures $(EXPECTED_FAILURES) -v $(CONFORMANCE_EXECUTOR)
 
 clean:
 	cargo clean

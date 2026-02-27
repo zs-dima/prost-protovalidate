@@ -541,6 +541,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "prost-protovalidate-conformance"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "prost-build",
+ "prost-protovalidate",
+ "prost-protovalidate-types",
+ "prost-reflect",
+ "prost-types",
+]
+
+[[package]]
 name = "prost-protovalidate-types"
 version = "0.1.0"
 dependencies = [
