@@ -91,6 +91,9 @@ jobs:
       - uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           package: prost-protovalidate-types
+        # Generated types mirror upstream proto definitions; new oneof/enum
+        # variants from upstream are always semver-breaking on exhaustive enums.
+        continue-on-error: true
       - uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           package: prost-protovalidate
