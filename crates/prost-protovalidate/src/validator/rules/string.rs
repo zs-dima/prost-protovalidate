@@ -16,14 +16,7 @@ static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 static ULID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^[0-7][0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{25}$").expect("ulid regex must compile")
 });
-static PROTOBUF_FQN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[A-Za-z_][A-Za-z_0-9]*(\\.[A-Za-z_][A-Za-z_0-9]*)*$")
-        .expect("protobuf fqn regex must compile")
-});
-static PROTOBUF_DOT_FQN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^\\.[A-Za-z_][A-Za-z_0-9]*(\\.[A-Za-z_][A-Za-z_0-9]*)*$")
-        .expect("protobuf dot fqn regex must compile")
-});
+
 /// Strict HTTP header name: token chars per RFC 7230's `token` rule.
 /// Allowed characters: `!#$%&'*+-.0-9A-Za-z^_``|~`, with optional `:` prefix for pseudo-headers.
 fn is_valid_http_header_name_strict(s: &str) -> bool {
@@ -120,8 +113,6 @@ enum WellKnownStringRule {
     Ipv6Prefix,
     HostAndPort,
     Ulid,
-    ProtobufFqn,
-    ProtobufDotFqn,
     HttpHeaderName,
     HttpHeaderValue,
 }
@@ -367,8 +358,6 @@ fn parse_well_known_string_rule(
         WellKnown::Ipv6Prefix(true) => Some(WellKnownStringRule::Ipv6Prefix),
         WellKnown::HostAndPort(true) => Some(WellKnownStringRule::HostAndPort),
         WellKnown::Ulid(true) => Some(WellKnownStringRule::Ulid),
-        WellKnown::ProtobufFqn(true) => Some(WellKnownStringRule::ProtobufFqn),
-        WellKnown::ProtobufDotFqn(true) => Some(WellKnownStringRule::ProtobufDotFqn),
         WellKnown::WellKnownRegex(v) => match prost_protovalidate_types::KnownRegex::try_from(*v) {
             Ok(prost_protovalidate_types::KnownRegex::HttpHeaderName) => {
                 Some(WellKnownStringRule::HttpHeaderName)
@@ -400,9 +389,7 @@ fn parse_well_known_string_rule(
         | WellKnown::Ipv4Prefix(false)
         | WellKnown::Ipv6Prefix(false)
         | WellKnown::HostAndPort(false)
-        | WellKnown::Ulid(false)
-        | WellKnown::ProtobufFqn(false)
-        | WellKnown::ProtobufDotFqn(false) => None,
+        | WellKnown::Ulid(false) => None,
     };
 
     Ok(parsed)
@@ -633,38 +620,6 @@ fn check_well_known(s: &str, rule: WellKnownStringRule, strict: bool) -> Option<
             }
             if !is_ulid(s) {
                 return Some(Violation::new_constraint("", "string.ulid", "string.ulid"));
-            }
-        }
-        WellKnownStringRule::ProtobufFqn => {
-            if s.is_empty() {
-                return Some(Violation::new_constraint(
-                    "",
-                    "string.protobuf_fqn_empty",
-                    "string.protobuf_fqn",
-                ));
-            }
-            if !is_protobuf_fqn(s) {
-                return Some(Violation::new_constraint(
-                    "",
-                    "string.protobuf_fqn",
-                    "string.protobuf_fqn",
-                ));
-            }
-        }
-        WellKnownStringRule::ProtobufDotFqn => {
-            if s.is_empty() {
-                return Some(Violation::new_constraint(
-                    "",
-                    "string.protobuf_dot_fqn_empty",
-                    "string.protobuf_dot_fqn",
-                ));
-            }
-            if !is_protobuf_dot_fqn(s) {
-                return Some(Violation::new_constraint(
-                    "",
-                    "string.protobuf_dot_fqn",
-                    "string.protobuf_dot_fqn",
-                ));
             }
         }
         WellKnownStringRule::HttpHeaderName => {
@@ -1051,14 +1006,6 @@ fn is_ulid(s: &str) -> bool {
     ULID_REGEX.is_match(s)
 }
 
-fn is_protobuf_fqn(s: &str) -> bool {
-    PROTOBUF_FQN_REGEX.is_match(s)
-}
-
-fn is_protobuf_dot_fqn(s: &str) -> bool {
-    PROTOBUF_DOT_FQN_REGEX.is_match(s)
-}
-
 #[derive(Clone, Copy)]
 enum IpVersion {
     Any,
@@ -1218,8 +1165,8 @@ mod tests {
     use prost_protovalidate_types::{StringRules, string_rules::WellKnown};
 
     use super::{
-        IpVersion, StringRuleEval, WellKnownStringRule, check_well_known, is_host_and_port,
-        is_ip_prefix, is_protobuf_dot_fqn, is_protobuf_fqn, is_tuuid, is_ulid, is_uri, is_uri_ref,
+        IpVersion, StringRuleEval, is_host_and_port, is_ip_prefix, is_tuuid, is_ulid, is_uri,
+        is_uri_ref,
     };
 
     #[test]
@@ -1254,35 +1201,6 @@ mod tests {
 
         assert!(is_ulid("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
         assert!(!is_ulid("81ARZ3NDEKTSV4RRFFQ69G5FAV"));
-
-        assert!(is_protobuf_fqn("google.protobuf.Timestamp"));
-        assert!(!is_protobuf_fqn(".google.protobuf.Timestamp"));
-
-        assert!(is_protobuf_dot_fqn(".google.protobuf.Timestamp"));
-        assert!(!is_protobuf_dot_fqn("google.protobuf.Timestamp"));
-    }
-
-    #[test]
-    fn protobuf_fqn_and_dot_fqn_patterns_match_conformance_cases() {
-        assert!(is_protobuf_fqn("buf.validate"));
-        assert!(is_protobuf_fqn("my_package.MyMessage"));
-        assert!(is_protobuf_fqn("_any_Crazy_CASE_with_01234_numbers"));
-        assert!(is_protobuf_fqn("c3p0"));
-        assert!(!is_protobuf_fqn(""));
-        assert!(!is_protobuf_fqn(".x"));
-        assert!(!is_protobuf_fqn("x."));
-        assert!(!is_protobuf_fqn("a..b"));
-        assert!(!is_protobuf_fqn("1a"));
-        assert!(!is_protobuf_fqn("a$"));
-
-        assert!(is_protobuf_dot_fqn(".buf.validate"));
-        assert!(is_protobuf_dot_fqn(".my_package.MyMessage"));
-        assert!(is_protobuf_dot_fqn("._any_Crazy_CASE_with_01234_numbers"));
-        assert!(!is_protobuf_dot_fqn(""));
-        assert!(!is_protobuf_dot_fqn(".x."));
-        assert!(!is_protobuf_dot_fqn(".a..b"));
-        assert!(!is_protobuf_dot_fqn(".1a"));
-        assert!(!is_protobuf_dot_fqn(".a$"));
     }
 
     #[test]
@@ -1301,19 +1219,6 @@ mod tests {
                 "is_uri_ref must be panic-safe for {input:?}"
             );
         }
-    }
-
-    #[test]
-    fn protobuf_empty_violations_keep_base_rule_path() {
-        let fqn = check_well_known("", WellKnownStringRule::ProtobufFqn, true)
-            .expect("protobuf_fqn empty should violate");
-        assert_eq!(fqn.rule_id(), "string.protobuf_fqn_empty");
-        assert_eq!(fqn.rule_path(), "string.protobuf_fqn");
-
-        let dot_fqn = check_well_known("", WellKnownStringRule::ProtobufDotFqn, true)
-            .expect("protobuf_dot_fqn empty should violate");
-        assert_eq!(dot_fqn.rule_id(), "string.protobuf_dot_fqn_empty");
-        assert_eq!(dot_fqn.rule_path(), "string.protobuf_dot_fqn");
     }
 
     #[test]
