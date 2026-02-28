@@ -33,12 +33,11 @@ impl Evaluator for AnyEval {
         };
 
         // Get the type_url field from the Any message
-        let type_url = match any_msg.get_field_by_name("type_url") {
-            Some(val) => match val.as_str() {
-                Some(s) => s.to_string(),
-                None => return Ok(()),
-            },
-            None => return Ok(()),
+        let Some(type_url) = any_msg
+            .get_field_by_name("type_url")
+            .and_then(|v| v.as_str().map(str::to_string))
+        else {
+            return Ok(());
         };
 
         if !self.r#in.is_empty() && !self.r#in.contains(&type_url) {

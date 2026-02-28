@@ -1,5 +1,6 @@
-use prost_reflect::ReflectMessage;
 use std::sync::LazyLock;
+
+use prost_reflect::ReflectMessage;
 
 use crate::config::{NopFilter, ValidationConfig, ValidationOption, ValidatorOption};
 use crate::error::Error;
@@ -147,12 +148,14 @@ pub fn validate<M: ReflectMessage>(msg: &M) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::config::Filter;
-    use pretty_assertions::assert_eq;
-    use prost_reflect::{DynamicMessage, MessageDescriptor, ReflectMessage};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    use pretty_assertions::assert_eq;
+    use prost_reflect::{DynamicMessage, MessageDescriptor, ReflectMessage};
+
+    use super::*;
+    use crate::config::Filter;
 
     struct DenyFilter;
 

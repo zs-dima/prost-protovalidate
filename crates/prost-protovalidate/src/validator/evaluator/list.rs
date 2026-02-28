@@ -4,6 +4,7 @@ use crate::config::ValidationConfig;
 use crate::error::{self, Error};
 
 use super::Evaluator;
+use super::prepend_rule_prefix;
 use super::value::ValueEval;
 
 /// Evaluator for repeated (list) fields.
@@ -54,18 +55,5 @@ impl Evaluator for ListEval {
             Some(err) => Err(err),
             None => Ok(()),
         }
-    }
-}
-
-fn prepend_rule_prefix(result: Result<(), Error>, prefix: &str) -> Result<(), Error> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(Error::Validation(mut ve)) => {
-            for violation in &mut ve.violations {
-                violation.prepend_rule_path(prefix);
-            }
-            Err(Error::Validation(ve))
-        }
-        Err(other) => Err(other),
     }
 }

@@ -1,46 +1,33 @@
 use std::fmt;
 use std::sync::LazyLock;
 
-use prost_protovalidate_types::{FieldPath, FieldPathElement, field_path_element};
 use prost_reflect::{FieldDescriptor, Kind, MessageDescriptor, Value};
 
+use prost_protovalidate_types::{FieldPath, FieldPathElement, field_path_element};
+
 /// Cached `FieldRules` message descriptor for hydrating rule paths.
-static FIELD_RULES_DESCRIPTOR: LazyLock<MessageDescriptor> = LazyLock::new(|| {
-    prost_protovalidate_types::DESCRIPTOR_POOL
-        .get_message_by_name("buf.validate.FieldRules")
-        .expect("FieldRules descriptor must exist")
+static FIELD_RULES_DESCRIPTOR: LazyLock<Option<MessageDescriptor>> = LazyLock::new(|| {
+    prost_protovalidate_types::DESCRIPTOR_POOL.get_message_by_name("buf.validate.FieldRules")
 });
 
 /// A single instance where a validation rule was not met.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Violation {
-    /// The dot-separated field path where the violation occurred (e.g. `email`, `home.lat`).
-    pub field_path: String,
-
-    /// The dot-separated rule path that was violated (e.g. `string.min_len`).
-    pub rule_path: String,
-
-    /// Machine-readable constraint identifier (e.g. `string.min_len`, `required`).
-    pub rule_id: String,
-
-    /// Human-readable violation message.
-    pub message: String,
+    /// Wire-compatible payload and canonical source for path/id/message state.
+    proto: prost_protovalidate_types::Violation,
 
     /// The field descriptor for the violated field, if available.
-    pub field_descriptor: Option<FieldDescriptor>,
+    field_descriptor: Option<FieldDescriptor>,
 
     /// The field value that failed validation, when available.
-    pub field_value: Option<Value>,
+    field_value: Option<Value>,
 
     /// The descriptor for the violated rule field, when available.
-    pub rule_descriptor: Option<FieldDescriptor>,
+    rule_descriptor: Option<FieldDescriptor>,
 
     /// The value of the violated rule field, when available.
-    pub rule_value: Option<Value>,
-
-    /// Wire-compatible violation payload.
-    pub proto: prost_protovalidate_types::Violation,
+    rule_value: Option<Value>,
 
     /// Extension field path element for predefined rules, preserved across `sync_proto` calls.
     extension_element: Option<FieldPathElement>,
@@ -52,20 +39,19 @@ impl Violation {
         rule_id: impl Into<String>,
         message: impl Into<String>,
     ) -> Self {
-        let rule_id = rule_id.into();
         let mut out = Self {
-            field_path: field_path.into(),
-            rule_path: rule_id.clone(),
-            rule_id,
-            message: message.into(),
+            proto: prost_protovalidate_types::Violation::default(),
             field_descriptor: None,
             field_value: None,
             rule_descriptor: None,
             rule_value: None,
-            proto: prost_protovalidate_types::Violation::default(),
             extension_element: None,
         };
-        out.sync_proto();
+        out.set_field_path(field_path);
+        let rule_id = rule_id.into();
+        out.set_rule_path(rule_id.clone());
+        out.set_rule_id(rule_id);
+        out.set_message(message);
         out
     }
 
@@ -79,102 +65,166 @@ impl Violation {
         rule_path: impl Into<String>,
     ) -> Self {
         let mut out = Self {
-            field_path: field_path.into(),
-            rule_path: rule_path.into(),
-            rule_id: rule_id.into(),
-            message: String::new(),
+            proto: prost_protovalidate_types::Violation::default(),
             field_descriptor: None,
             field_value: None,
             rule_descriptor: None,
             rule_value: None,
-            proto: prost_protovalidate_types::Violation::default(),
             extension_element: None,
         };
-        out.sync_proto();
+        out.set_field_path(field_path);
+        out.set_rule_path(rule_path);
+        out.set_rule_id(rule_id);
         out
     }
 
-    fn sync_proto(&mut self) {
-        if self.proto.field.is_none() {
-            self.proto.field = parse_path(&self.field_path);
+    /// Serialize this violation into the wire-compatible protobuf message.
+    #[must_use]
+    pub fn to_proto(&self) -> prost_protovalidate_types::Violation {
+        let mut proto = self.proto.clone();
+        hydrate_and_patch_rule_path(&mut proto.rule, self.extension_element.as_ref());
+        proto
+    }
+
+    /// Returns the dot-separated field path where this violation occurred.
+    #[must_use]
+    pub fn field_path(&self) -> String {
+        field_path_string(self.proto.field.as_ref())
+    }
+
+    /// Returns the dot-separated rule path that was violated.
+    #[must_use]
+    pub fn rule_path(&self) -> String {
+        field_path_string(self.proto.rule.as_ref())
+    }
+
+    /// Returns the machine-readable constraint identifier.
+    #[must_use]
+    pub fn rule_id(&self) -> &str {
+        self.proto.rule_id.as_deref().unwrap_or("")
+    }
+
+    /// Returns the human-readable violation message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        self.proto.message.as_deref().unwrap_or("")
+    }
+
+    /// Returns the field descriptor for the violated field, if available.
+    #[must_use]
+    pub fn field_descriptor(&self) -> Option<&FieldDescriptor> {
+        self.field_descriptor.as_ref()
+    }
+
+    /// Returns the field value that failed validation, when available.
+    #[must_use]
+    pub fn field_value(&self) -> Option<&Value> {
+        self.field_value.as_ref()
+    }
+
+    /// Returns the descriptor for the violated rule field, when available.
+    #[must_use]
+    pub fn rule_descriptor(&self) -> Option<&FieldDescriptor> {
+        self.rule_descriptor.as_ref()
+    }
+
+    /// Returns the value of the violated rule field, when available.
+    #[must_use]
+    pub fn rule_value(&self) -> Option<&Value> {
+        self.rule_value.as_ref()
+    }
+
+    /// Sets the field path.
+    pub fn set_field_path(&mut self, field_path: impl Into<String>) {
+        self.proto.field = parse_path(&field_path.into());
+        if let Some(descriptor) = self.field_descriptor.as_ref() {
+            apply_field_descriptor_to_path(&mut self.proto.field, descriptor);
         }
-        self.proto.rule = parse_path(&self.rule_path);
-        hydrate_rule_path(&mut self.proto.rule);
-        // Re-apply stored extension element metadata (field_number, field_type)
-        // that parse_path cannot reconstruct from the string representation.
-        if let (Some(ext), Some(path)) = (&self.extension_element, self.proto.rule.as_mut()) {
-            if let Some(ext_name) = &ext.field_name {
-                for el in &mut path.elements {
-                    if el.field_name.as_deref() == Some(ext_name) {
-                        el.field_number = ext.field_number;
-                        el.field_type = ext.field_type;
-                    }
-                }
-            }
-        }
-        self.proto.rule_id = if self.rule_id.is_empty() {
+    }
+
+    /// Sets the rule path.
+    pub fn set_rule_path(&mut self, rule_path: impl Into<String>) {
+        self.proto.rule = parse_path(&rule_path.into());
+        hydrate_and_patch_rule_path(&mut self.proto.rule, self.extension_element.as_ref());
+    }
+
+    /// Sets the machine-readable rule identifier.
+    pub fn set_rule_id(&mut self, rule_id: impl Into<String>) {
+        let rule_id = rule_id.into();
+        self.proto.rule_id = if rule_id.is_empty() {
             None
         } else {
-            Some(self.rule_id.clone())
+            Some(rule_id)
         };
-        self.proto.message = if self.message.is_empty() {
+    }
+
+    /// Sets the human-readable violation message.
+    pub fn set_message(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        self.proto.message = if message.is_empty() {
             None
         } else {
-            Some(self.message.clone())
+            Some(message)
         };
+    }
+
+    pub(crate) fn has_field_descriptor(&self) -> bool {
+        self.field_descriptor.is_some()
+    }
+
+    pub(crate) fn has_field_value(&self) -> bool {
+        self.field_value.is_some()
+    }
+
+    pub(crate) fn has_rule_descriptor(&self) -> bool {
+        self.rule_descriptor.is_some()
+    }
+
+    pub(crate) fn has_rule_value(&self) -> bool {
+        self.rule_value.is_some()
+    }
+
+    pub(crate) fn set_field_descriptor(&mut self, desc: &FieldDescriptor) {
+        self.field_descriptor = Some(desc.clone());
+        apply_field_descriptor_to_path(&mut self.proto.field, desc);
     }
 
     pub(crate) fn with_field_descriptor(mut self, desc: &FieldDescriptor) -> Self {
-        self.field_descriptor = Some(desc.clone());
-        if let Some(path) = self.proto.field.as_mut() {
-            if let Some(first) = path.elements.first_mut() {
-                let subscript = normalize_subscript_for_descriptor(first.subscript.take(), desc);
-                *first = field_path_element_from_descriptor(desc);
-                first.subscript = subscript;
-                apply_map_metadata(first, desc);
-            } else {
-                path.elements.push(field_path_element_from_descriptor(desc));
-            }
-        } else {
-            self.proto.field = Some(FieldPath {
-                elements: vec![field_path_element_from_descriptor(desc)],
-            });
-        }
+        self.set_field_descriptor(desc);
         self
     }
 
-    pub(crate) fn with_field_value(mut self, value: Value) -> Self {
+    pub(crate) fn set_field_value(&mut self, value: Value) {
         self.field_value = Some(value);
-        self
     }
 
     pub(crate) fn with_rule_path(mut self, rule_path: impl Into<String>) -> Self {
-        self.rule_path = rule_path.into();
-        self.sync_proto();
+        self.set_rule_path(rule_path);
         self
+    }
+
+    pub(crate) fn set_rule_descriptor(&mut self, descriptor: FieldDescriptor) {
+        self.rule_descriptor = Some(descriptor);
     }
 
     pub(crate) fn with_rule_descriptor(mut self, descriptor: FieldDescriptor) -> Self {
-        self.rule_descriptor = Some(descriptor);
+        self.set_rule_descriptor(descriptor);
         self
     }
 
-    pub(crate) fn with_rule_value(mut self, value: Value) -> Self {
+    pub(crate) fn set_rule_value(&mut self, value: Value) {
         self.rule_value = Some(value);
+    }
+
+    pub(crate) fn with_rule_value(mut self, value: Value) -> Self {
+        self.set_rule_value(value);
         self
     }
 
     /// Append an extension element to the rule path.
     pub(crate) fn with_rule_extension_element(mut self, element: FieldPathElement) -> Self {
-        // Store the extension element so sync_proto can re-apply metadata.
+        // Store the extension element so rule path hydration can re-apply metadata.
         self.extension_element = Some(element.clone());
-        // Update the string representation
-        if let Some(name) = &element.field_name {
-            if !self.rule_path.is_empty() {
-                self.rule_path.push('.');
-            }
-            self.rule_path.push_str(name);
-        }
         // Append the element to the proto path
         if let Some(path) = self.proto.rule.as_mut() {
             path.elements.push(element);
@@ -183,13 +233,13 @@ impl Violation {
                 elements: vec![element],
             });
         }
+        hydrate_and_patch_rule_path(&mut self.proto.rule, self.extension_element.as_ref());
         self
     }
 
     /// Strip the rule path so `proto.rule` is `None`.
     /// Used for violations where only `rule_id` should be emitted (e.g. oneof, message-level CEL).
     pub(crate) fn without_rule_path(mut self) -> Self {
-        self.rule_path.clear();
         self.proto.rule = None;
         self
     }
@@ -203,9 +253,7 @@ impl Violation {
         if parent.is_empty() {
             return;
         }
-        self.field_path = prepend_path_string(parent, &self.field_path);
         prepend_proto_field_path(&mut self.proto.field, parent, None);
-        self.sync_proto();
     }
 
     pub(crate) fn prepend_path_with_descriptor(
@@ -216,9 +264,7 @@ impl Violation {
         if parent.is_empty() {
             return;
         }
-        self.field_path = prepend_path_string(parent, &self.field_path);
         prepend_proto_field_path(&mut self.proto.field, parent, Some(descriptor));
-        self.sync_proto();
     }
 
     /// Prepend a parent rule path element.
@@ -226,12 +272,48 @@ impl Violation {
         if parent.is_empty() {
             return;
         }
-        if self.rule_path.is_empty() {
-            self.rule_path = parent.to_string();
+        let current = self.rule_path();
+        if current.is_empty() {
+            self.set_rule_path(parent.to_string());
         } else {
-            self.rule_path = format!("{parent}.{}", self.rule_path);
+            self.set_rule_path(format!("{parent}.{current}"));
         }
-        self.sync_proto();
+    }
+}
+
+fn apply_field_descriptor_to_path(path: &mut Option<FieldPath>, desc: &FieldDescriptor) {
+    if let Some(path) = path.as_mut() {
+        if let Some(first) = path.elements.first_mut() {
+            let subscript = normalize_subscript_for_descriptor(first.subscript.take(), desc);
+            *first = field_path_element_from_descriptor(desc);
+            first.subscript = subscript;
+            apply_map_metadata(first, desc);
+        } else {
+            path.elements.push(field_path_element_from_descriptor(desc));
+        }
+    } else {
+        *path = Some(FieldPath {
+            elements: vec![field_path_element_from_descriptor(desc)],
+        });
+    }
+}
+
+fn hydrate_and_patch_rule_path(
+    path: &mut Option<FieldPath>,
+    extension_element: Option<&FieldPathElement>,
+) {
+    hydrate_rule_path(path);
+    // Re-apply stored extension element metadata (field_number, field_type)
+    // that parse_path cannot reconstruct from the string representation.
+    if let (Some(ext), Some(path)) = (extension_element, path.as_mut()) {
+        if let Some(ext_name) = &ext.field_name {
+            for el in &mut path.elements {
+                if el.field_name.as_deref() == Some(ext_name) {
+                    el.field_number = ext.field_number;
+                    el.field_type = ext.field_type;
+                }
+            }
+        }
     }
 }
 
@@ -314,7 +396,7 @@ fn normalize_subscript_for_descriptor(
     }
 }
 
-fn kind_to_descriptor_type(kind: &Kind) -> prost_types::field_descriptor_proto::Type {
+pub(crate) fn kind_to_descriptor_type(kind: &Kind) -> prost_types::field_descriptor_proto::Type {
     match *kind {
         Kind::Double => prost_types::field_descriptor_proto::Type::Double,
         Kind::Float => prost_types::field_descriptor_proto::Type::Float,
@@ -334,16 +416,6 @@ fn kind_to_descriptor_type(kind: &Kind) -> prost_types::field_descriptor_proto::
         Kind::Sint32 => prost_types::field_descriptor_proto::Type::Sint32,
         Kind::Sint64 => prost_types::field_descriptor_proto::Type::Sint64,
     }
-}
-
-fn prepend_path_string(parent: &str, current: &str) -> String {
-    if current.is_empty() {
-        return parent.to_string();
-    }
-    if current.starts_with('[') {
-        return format!("{parent}{current}");
-    }
-    format!("{parent}.{current}")
 }
 
 fn prepend_proto_field_path(
@@ -527,7 +599,9 @@ fn hydrate_rule_path(path: &mut Option<FieldPath>) {
     let Some(path) = path.as_mut() else {
         return;
     };
-    let mut descriptor: MessageDescriptor = FIELD_RULES_DESCRIPTOR.clone();
+    let Some(mut descriptor) = FIELD_RULES_DESCRIPTOR.clone() else {
+        return;
+    };
     for element in &mut path.elements {
         let Some(name) = element.field_name.as_deref() else {
             continue;
@@ -591,19 +665,19 @@ fn field_path_string(path: Option<&FieldPath>) -> String {
 
 impl fmt::Display for Violation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let rendered_path = if self.field_path.is_empty() {
-            field_path_string(self.proto.field.as_ref())
-        } else {
-            self.field_path.clone()
-        };
+        let has_path = self
+            .proto
+            .field
+            .as_ref()
+            .is_some_and(|p| !p.elements.is_empty());
 
-        if !rendered_path.is_empty() {
-            write!(f, "{rendered_path}: ")?;
+        if has_path {
+            write!(f, "{}: ", self.field_path())?;
         }
-        if !self.message.is_empty() {
-            write!(f, "{}", self.message)
-        } else if !self.rule_id.is_empty() {
-            write!(f, "[{}]", self.rule_id)
+        if !self.message().is_empty() {
+            write!(f, "{}", self.message())
+        } else if !self.rule_id().is_empty() {
+            write!(f, "[{}]", self.rule_id())
         } else {
             write!(f, "[unknown]")
         }
@@ -612,8 +686,13 @@ impl fmt::Display for Violation {
 
 #[cfg(test)]
 mod tests {
-    use super::{Violation, field_path_string};
+    use std::fmt::Write;
+
     use pretty_assertions::assert_eq;
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+
+    use super::{Violation, field_path_string, parse_path};
 
     fn descriptor_field(message: &str, field: &str) -> prost_reflect::FieldDescriptor {
         prost_protovalidate_types::DESCRIPTOR_POOL
@@ -741,5 +820,29 @@ mod tests {
         let first = &rule.elements[0];
         assert_eq!(first.field_name.as_deref(), Some("nonexistent"));
         assert_eq!(first.field_number, None);
+    }
+
+    proptest! {
+        #[test]
+        fn dotted_paths_round_trip_through_parser(
+            segments in vec("[a-zA-Z_][a-zA-Z0-9_]{0,8}", 1..6)
+        ) {
+            let path = segments.join(".");
+            let parsed = parse_path(&path);
+            prop_assert_eq!(field_path_string(parsed.as_ref()), path);
+        }
+
+        #[test]
+        fn indexed_paths_round_trip_through_parser(
+            name in "[a-zA-Z_][a-zA-Z0-9_]{0,8}",
+            indexes in vec(0_u16..1000, 1..4)
+        ) {
+            let mut path = name;
+            for index in &indexes {
+                let _ = write!(path, "[{index}]");
+            }
+            let parsed = parse_path(&path);
+            prop_assert_eq!(field_path_string(parsed.as_ref()), path);
+        }
     }
 }

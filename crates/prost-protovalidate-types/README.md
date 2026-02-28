@@ -11,6 +11,7 @@ Generated Rust types for the [buf.validate](https://github.com/bufbuild/protoval
 - All message and enum types from `buf/validate/validate.proto` (e.g. `FieldRules`, `MessageRules`, `OneofRules`).
 - A shared `DESCRIPTOR_POOL` containing the file descriptor set for runtime reflection.
 - Extension traits for extracting constraint annotations from `prost-reflect` descriptors (`FieldConstraintsExt`, `MessageConstraintsExt`, `OneofConstraintsExt`, and more).
+- Typed helper functions (`field_constraints_typed`, `message_constraints_typed`, `oneof_constraints_typed`, `predefined_constraints_typed`) for callers that need concrete decode errors.
 
 ## When to use this crate
 

@@ -151,7 +151,7 @@ fn fmt_dur(d: &Duration) -> String {
         };
         let secs = d.seconds.unsigned_abs();
         let nanos = d.nanos.unsigned_abs();
-        let frac = format!("{nanos:09}").trim_end_matches('0').to_owned();
+        let frac = format!("{nanos:09}").trim_end_matches('0').to_string();
         format!("{sign}{secs}.{frac}s")
     }
 }

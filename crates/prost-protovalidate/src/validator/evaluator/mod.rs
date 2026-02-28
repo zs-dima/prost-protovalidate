@@ -15,6 +15,20 @@ use prost_reflect::DynamicMessage;
 use crate::config::ValidationConfig;
 use crate::error::Error;
 
+/// Prepend a rule path prefix to all violations in an error result.
+pub(crate) fn prepend_rule_prefix(result: Result<(), Error>, prefix: &str) -> Result<(), Error> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(Error::Validation(mut ve)) => {
+            for violation in ve.violations_mut() {
+                violation.prepend_rule_path(prefix);
+            }
+            Err(Error::Validation(ve))
+        }
+        Err(other) => Err(other),
+    }
+}
+
 /// Evaluator for concrete field values (scalars, list items, map keys/values).
 pub(crate) trait Evaluator: Send + Sync {
     /// Returns true if this evaluator always succeeds (no-op).

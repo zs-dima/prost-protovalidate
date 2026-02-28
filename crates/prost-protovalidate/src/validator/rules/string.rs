@@ -1214,11 +1214,13 @@ fn is_port(s: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+    use prost_protovalidate_types::{StringRules, string_rules::WellKnown};
+
     use super::{
         IpVersion, StringRuleEval, WellKnownStringRule, check_well_known, is_host_and_port,
         is_ip_prefix, is_protobuf_dot_fqn, is_protobuf_fqn, is_tuuid, is_ulid, is_uri, is_uri_ref,
     };
-    use prost_protovalidate_types::{StringRules, string_rules::WellKnown};
 
     #[test]
     fn uri_ref_rejects_invalid_sequences() {
@@ -1305,13 +1307,13 @@ mod tests {
     fn protobuf_empty_violations_keep_base_rule_path() {
         let fqn = check_well_known("", WellKnownStringRule::ProtobufFqn, true)
             .expect("protobuf_fqn empty should violate");
-        assert_eq!(fqn.rule_id, "string.protobuf_fqn_empty");
-        assert_eq!(fqn.rule_path, "string.protobuf_fqn");
+        assert_eq!(fqn.rule_id(), "string.protobuf_fqn_empty");
+        assert_eq!(fqn.rule_path(), "string.protobuf_fqn");
 
         let dot_fqn = check_well_known("", WellKnownStringRule::ProtobufDotFqn, true)
             .expect("protobuf_dot_fqn empty should violate");
-        assert_eq!(dot_fqn.rule_id, "string.protobuf_dot_fqn_empty");
-        assert_eq!(dot_fqn.rule_path, "string.protobuf_dot_fqn");
+        assert_eq!(dot_fqn.rule_id(), "string.protobuf_dot_fqn_empty");
+        assert_eq!(dot_fqn.rule_path(), "string.protobuf_dot_fqn");
     }
 
     #[test]

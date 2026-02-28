@@ -29,6 +29,8 @@ impl MapRuleEval {
         };
 
         let mut violations = Vec::new();
+        // usize always fits in u64 (max usize ≤ u64::MAX on all targets)
+        #[allow(clippy::cast_possible_truncation)]
         let len = map.len() as u64;
 
         if let Some(min) = self.min_pairs {

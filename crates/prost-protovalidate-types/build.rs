@@ -9,8 +9,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("cargo:rerun-if-changed={proto_dir}/{f}");
     }
 
-    #[allow(clippy::unwrap_used)]
-    let base_path = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let base_path = PathBuf::from(
+        env::var("OUT_DIR")
+            .map_err(|err| format!("missing OUT_DIR environment variable: {err}"))?,
+    );
     let descriptor_path = base_path.join("file_descriptor_set.bin");
 
     prost_reflect_build::Builder::new()

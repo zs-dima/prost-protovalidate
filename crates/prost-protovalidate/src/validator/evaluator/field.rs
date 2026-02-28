@@ -1,5 +1,6 @@
-use prost_reflect::{DynamicMessage, ReflectMessage};
 use std::sync::LazyLock;
+
+use prost_reflect::{DynamicMessage, ReflectMessage};
 
 use crate::config::ValidationConfig;
 use crate::error::{Error, ValidationError};
@@ -8,12 +9,12 @@ use crate::violation::Violation;
 use super::MessageEvaluator;
 use super::value::ValueEval;
 
-static REQUIRED_RULE_DESCRIPTOR: LazyLock<prost_reflect::FieldDescriptor> = LazyLock::new(|| {
-    prost_protovalidate_types::FieldRules::default()
-        .descriptor()
-        .get_field_by_name("required")
-        .expect("field rules descriptor must contain `required`")
-});
+static REQUIRED_RULE_DESCRIPTOR: LazyLock<Option<prost_reflect::FieldDescriptor>> =
+    LazyLock::new(|| {
+        prost_protovalidate_types::FieldRules::default()
+            .descriptor()
+            .get_field_by_name("required")
+    });
 
 /// Evaluator for a single message field.
 /// Handles required checks, ignore logic, and delegates to value evaluation.
@@ -91,13 +92,13 @@ impl MessageEvaluator for FieldEval {
 
         // Check required
         if self.required && !field_is_set {
-            return Err(ValidationError::single(
-                Violation::new(&field_name, "required", "value is required")
-                    .with_rule_descriptor(REQUIRED_RULE_DESCRIPTOR.clone())
-                    .with_rule_value(prost_reflect::Value::Bool(true))
-                    .with_field_descriptor(field_desc),
-            )
-            .into());
+            let mut violation = Violation::new(&field_name, "required", "value is required")
+                .with_rule_value(prost_reflect::Value::Bool(true))
+                .with_field_descriptor(field_desc);
+            if let Some(rule_descriptor) = REQUIRED_RULE_DESCRIPTOR.clone() {
+                violation = violation.with_rule_descriptor(rule_descriptor);
+            }
+            return Err(ValidationError::single(violation).into());
         }
 
         // Check ignore-empty: skip if field has presence, is unset, and not legacy-required
@@ -119,18 +120,12 @@ fn enrich_field_violations(
     match result {
         Ok(()) => Ok(()),
         Err(Error::Validation(mut ve)) => {
-            for violation in &mut ve.violations {
-                let mut updated: Option<crate::violation::Violation> = None;
-                if violation.field_descriptor.is_none() {
-                    let current = updated.take().unwrap_or_else(|| violation.clone());
-                    updated = Some(current.with_field_descriptor(field_desc));
+            for violation in ve.violations_mut() {
+                if !violation.has_field_descriptor() {
+                    violation.set_field_descriptor(field_desc);
                 }
-                if violation.field_value.is_none() {
-                    let current = updated.take().unwrap_or_else(|| violation.clone());
-                    updated = Some(current.with_field_value(value.clone()));
-                }
-                if let Some(updated) = updated {
-                    *violation = updated;
+                if !violation.has_field_value() {
+                    violation.set_field_value(value.clone());
                 }
             }
             Err(Error::Validation(ve))

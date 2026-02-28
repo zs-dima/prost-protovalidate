@@ -104,6 +104,8 @@ impl BytesRuleEval {
             }
         }
 
+        // usize always fits in u64 (max usize ≤ u64::MAX on all targets)
+        #[allow(clippy::cast_possible_truncation)]
         let len = b.len() as u64;
         if let Some(expected) = self.len {
             if len != expected {

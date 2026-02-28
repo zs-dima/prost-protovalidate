@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
+use prost_reflect::ReflectMessage;
+
 use crate::config::ValidationConfig;
 use crate::error::{Error, ValidationError};
 use crate::violation::Violation;
-use prost_reflect::ReflectMessage;
 
 pub(crate) struct FieldMaskRuleEval {
     r#const: Option<Vec<String>>,
@@ -41,7 +42,7 @@ impl FieldMaskRuleEval {
                     .as_list()
                     .map(|list| {
                         list.iter()
-                            .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+                            .filter_map(|v| v.as_str().map(str::to_string))
                             .collect::<Vec<_>>()
                     })
                     .unwrap_or_default()

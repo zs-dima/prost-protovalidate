@@ -993,15 +993,15 @@ mod tests {
             .evaluate_value_with_this(&prost_reflect::Value::Bool(false), &cfg)
             .expect("bool rule should evaluate")
             .expect("false should produce violation");
-        assert_eq!(bool_violation.rule_id, "foo");
-        assert_eq!(bool_violation.message, "fizz");
+        assert_eq!(bool_violation.rule_id(), "foo");
+        assert_eq!(bool_violation.message(), "fizz");
 
         let string_violation = string_program
             .evaluate_value_with_this(&prost_reflect::Value::Bool(false), &cfg)
             .expect("string rule should evaluate")
             .expect("non-empty string should produce violation");
-        assert_eq!(string_violation.rule_id, "bar");
-        assert_eq!(string_violation.message, "buzz");
+        assert_eq!(string_violation.rule_id(), "bar");
+        assert_eq!(string_violation.message(), "buzz");
 
         let invalid_type_program = CelRuleProgram {
             rule_id: "bad_type".to_string(),
@@ -1033,7 +1033,7 @@ mod tests {
         let Error::Validation(fail_slow) = fail_slow else {
             panic!("expected validation error");
         };
-        assert_eq!(fail_slow.violations.len(), 2);
+        assert_eq!(fail_slow.len(), 2);
 
         let fail_fast_cfg = ValidationConfig {
             fail_fast: true,
@@ -1049,7 +1049,7 @@ mod tests {
         let Error::Validation(fail_fast) = fail_fast else {
             panic!("expected validation error");
         };
-        assert_eq!(fail_fast.violations.len(), 1);
+        assert_eq!(fail_fast.len(), 1);
     }
 
     // ---- cel_int unit tests ----

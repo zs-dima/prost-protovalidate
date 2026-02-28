@@ -127,7 +127,7 @@ fn prepend_field_path(
     match result {
         Ok(()) => Ok(()),
         Err(Error::Validation(mut ve)) => {
-            for v in &mut ve.violations {
+            for v in ve.violations_mut() {
                 if field_path.starts_with('[') {
                     v.prepend_path(field_path);
                 } else {
@@ -148,29 +148,18 @@ fn enrich_violations(
     match result {
         Ok(()) => Ok(()),
         Err(Error::Validation(mut ve)) => {
-            for violation in &mut ve.violations {
-                if let Some((rule_descriptor, rule_value)) = rule_metadata.get(&violation.rule_id) {
-                    let mut updated: Option<crate::violation::Violation> = None;
-                    if violation.rule_descriptor.is_none() {
-                        let current = updated.take().unwrap_or_else(|| violation.clone());
-                        updated = Some(current.with_rule_descriptor(rule_descriptor.clone()));
+            for violation in ve.violations_mut() {
+                if let Some((rule_descriptor, rule_value)) = rule_metadata.get(violation.rule_id())
+                {
+                    if !violation.has_rule_descriptor() {
+                        violation.set_rule_descriptor(rule_descriptor.clone());
                     }
-                    if violation.rule_value.is_none() {
-                        let current = updated.take().unwrap_or_else(|| violation.clone());
-                        updated = Some(current.with_rule_value(rule_value.clone()));
-                    }
-                    if let Some(updated) = updated {
-                        *violation = updated;
+                    if !violation.has_rule_value() {
+                        violation.set_rule_value(rule_value.clone());
                     }
                 }
-
-                let mut updated: Option<crate::violation::Violation> = None;
-                if violation.field_value.is_none() {
-                    let current = updated.take().unwrap_or_else(|| violation.clone());
-                    updated = Some(current.with_field_value(value.clone()));
-                }
-                if let Some(updated) = updated {
-                    *violation = updated;
+                if !violation.has_field_value() {
+                    violation.set_field_value(value.clone());
                 }
             }
             Err(Error::Validation(ve))

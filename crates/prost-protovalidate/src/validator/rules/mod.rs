@@ -9,8 +9,9 @@ pub(crate) mod repeated;
 pub(crate) mod string;
 pub(crate) mod timestamp;
 
-use prost_protovalidate_types::FieldRules;
 use prost_reflect::{DynamicMessage, FieldDescriptor};
+
+use prost_protovalidate_types::FieldRules;
 
 use crate::error::{CompilationError, Error};
 

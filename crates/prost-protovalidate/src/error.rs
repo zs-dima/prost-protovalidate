@@ -23,7 +23,7 @@ pub enum Error {
 #[derive(Debug)]
 pub struct ValidationError {
     /// The list of constraint violations found during validation.
-    pub violations: Vec<Violation>,
+    violations: Vec<Violation>,
 }
 
 impl fmt::Display for ValidationError {
@@ -45,21 +45,53 @@ impl fmt::Display for ValidationError {
 impl std::error::Error for ValidationError {}
 
 impl ValidationError {
-    pub(crate) fn new(violations: Vec<Violation>) -> Self {
+    /// Create a validation error from a list of violations.
+    #[must_use]
+    pub fn new(violations: Vec<Violation>) -> Self {
         Self { violations }
     }
 
-    pub(crate) fn single(violation: Violation) -> Self {
+    /// Create a validation error containing a single violation.
+    #[must_use]
+    pub fn single(violation: Violation) -> Self {
         Self {
             violations: vec![violation],
         }
+    }
+
+    /// Returns all violations as a shared slice.
+    #[must_use]
+    pub fn violations(&self) -> &[Violation] {
+        &self.violations
+    }
+
+    /// Consume and return the underlying violations vector.
+    #[must_use]
+    pub fn into_violations(self) -> Vec<Violation> {
+        self.violations
+    }
+
+    /// Returns true when there are no violations.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.violations.is_empty()
+    }
+
+    /// Returns the number of violations.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.violations.len()
+    }
+
+    pub(crate) fn violations_mut(&mut self) -> &mut Vec<Violation> {
+        &mut self.violations
     }
 
     /// Convert to the wire-compatible `buf.validate.Violations` message.
     #[must_use]
     pub fn to_proto(&self) -> prost_protovalidate_types::Violations {
         prost_protovalidate_types::Violations {
-            violations: self.violations.iter().map(|v| v.proto.clone()).collect(),
+            violations: self.violations.iter().map(Violation::to_proto).collect(),
         }
     }
 }
@@ -102,7 +134,7 @@ pub(crate) fn merge_violations(
             }
             match acc {
                 Some(Error::Validation(mut existing)) => {
-                    existing.violations.extend(new_val.violations);
+                    existing.violations_mut().extend(new_val.into_violations());
                     (true, Some(Error::Validation(existing)))
                 }
                 _ => (true, Some(Error::Validation(new_val))),
@@ -113,9 +145,10 @@ pub(crate) fn merge_violations(
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+
     use super::{Error, ValidationError, merge_violations};
     use crate::violation::Violation;
-    use pretty_assertions::assert_eq;
 
     fn validation_error(rule_id: &str) -> Error {
         Error::Validation(ValidationError::single(Violation::new("", rule_id, "")))
@@ -154,8 +187,8 @@ mod tests {
         let Some(Error::Validation(err)) = acc else {
             panic!("expected validation error");
         };
-        assert_eq!(err.violations.len(), 1);
-        assert_eq!(err.violations[0].rule_id, "foo");
+        assert_eq!(err.len(), 1);
+        assert_eq!(err.violations()[0].rule_id(), "foo");
 
         let base = Some(validation_error("foo"));
         let (cont, acc) = merge_violations(base, Err(validation_error("bar")), false);
@@ -163,8 +196,30 @@ mod tests {
         let Some(Error::Validation(err)) = acc else {
             panic!("expected merged validation error");
         };
-        assert_eq!(err.violations.len(), 2);
-        assert_eq!(err.violations[0].rule_id, "foo");
-        assert_eq!(err.violations[1].rule_id, "bar");
+        assert_eq!(err.len(), 2);
+        assert_eq!(err.violations()[0].rule_id(), "foo");
+        assert_eq!(err.violations()[1].rule_id(), "bar");
+    }
+
+    #[test]
+    fn validation_error_to_proto_reflects_post_construction_mutation() {
+        let mut violation = Violation::new("one.two", "string.min_len", "must be >= 2");
+        violation.set_field_path("updated.path");
+        violation.set_rule_path("string.max_len");
+        violation.set_rule_id("string.max_len");
+        violation.set_message("must be <= 10");
+
+        let proto = ValidationError::new(vec![violation]).to_proto();
+        assert_eq!(proto.violations.len(), 1);
+
+        let first = &proto.violations[0];
+        let field_name = first
+            .field
+            .as_ref()
+            .and_then(|path| path.elements.first())
+            .and_then(|element| element.field_name.as_deref());
+        assert_eq!(field_name, Some("updated"));
+        assert_eq!(first.rule_id.as_deref(), Some("string.max_len"));
+        assert_eq!(first.message.as_deref(), Some("must be <= 10"));
     }
 }

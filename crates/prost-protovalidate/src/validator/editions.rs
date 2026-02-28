@@ -832,3 +832,19 @@ fn skip_wire_value_simple(cursor: &mut &[u8], wire_type: WireType) -> Result<(),
         WireType::EndGroup => Ok(()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_edition_descriptor_set;
+    use proptest::collection::vec;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn normalization_is_idempotent_for_arbitrary_bytes(input in vec(any::<u8>(), 0..2048)) {
+            let once = normalize_edition_descriptor_set(&input);
+            let twice = normalize_edition_descriptor_set(&once);
+            prop_assert_eq!(twice, once);
+        }
+    }
+}

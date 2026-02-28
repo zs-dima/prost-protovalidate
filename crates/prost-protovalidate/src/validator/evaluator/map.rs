@@ -4,6 +4,7 @@ use crate::config::ValidationConfig;
 use crate::error::{self, Error};
 
 use super::Evaluator;
+use super::prepend_rule_prefix;
 use super::value::ValueEval;
 
 /// Evaluator for map fields.
@@ -103,21 +104,8 @@ fn mark_key_violations(result: Result<(), Error>) -> Result<(), Error> {
     match result {
         Ok(()) => Ok(()),
         Err(Error::Validation(mut ve)) => {
-            for violation in &mut ve.violations {
+            for violation in ve.violations_mut() {
                 violation.mark_for_key();
-            }
-            Err(Error::Validation(ve))
-        }
-        Err(other) => Err(other),
-    }
-}
-
-fn prepend_rule_prefix(result: Result<(), Error>, prefix: &str) -> Result<(), Error> {
-    match result {
-        Ok(()) => Ok(()),
-        Err(Error::Validation(mut ve)) => {
-            for violation in &mut ve.violations {
-                violation.prepend_rule_path(prefix);
             }
             Err(Error::Validation(ve))
         }
@@ -127,6 +115,8 @@ fn prepend_rule_prefix(result: Result<(), Error>, prefix: &str) -> Result<(), Er
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+
     use super::map_key_to_string;
 
     #[test]

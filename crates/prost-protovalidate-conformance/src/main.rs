@@ -1,10 +1,11 @@
 use std::any::Any;
 use std::io::{self, Read, Write};
-use std::panic::{self, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use prost::Message;
-use prost_protovalidate::{Error, Validator, ValidatorOption, normalize_edition_descriptor_set};
 use prost_reflect::{DescriptorPool, DynamicMessage};
+
+use prost_protovalidate::{Error, Validator, ValidatorOption, normalize_edition_descriptor_set};
 
 #[allow(clippy::doc_markdown)]
 mod harness {
@@ -15,10 +16,17 @@ mod harness {
 }
 
 fn main() {
+    if let Err(err) = run() {
+        let _ = writeln!(io::stderr(), "{err}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), String> {
     let mut input = Vec::new();
     io::stdin()
         .read_to_end(&mut input)
-        .expect("failed to read stdin");
+        .map_err(|err| format!("failed to read stdin: {err}"))?;
 
     // Extract the raw fdset bytes (field 2) from the wire format BEFORE prost
     // decodes the request. prost_types::FileDescriptorSet drops extension data
@@ -27,13 +35,14 @@ fn main() {
     let fdset_bytes = extract_fdset_bytes(&input);
 
     let request = harness::TestConformanceRequest::decode(input.as_slice())
-        .expect("failed to decode TestConformanceRequest");
+        .map_err(|err| format!("failed to decode TestConformanceRequest: {err}"))?;
 
     let response = process_request(&request, fdset_bytes);
 
     io::stdout()
         .write_all(&response.encode_to_vec())
-        .expect("failed to write stdout");
+        .map_err(|err| format!("failed to write stdout: {err}"))?;
+    Ok(())
 }
 
 /// Extract raw bytes of the `fdset` field (field number 2, wire type LEN)
@@ -103,7 +112,7 @@ fn process_request(
 }
 
 fn build_suite(fdset_bytes: Vec<u8>) -> Result<(DescriptorPool, Validator), String> {
-    catch_unwind_silent(move || {
+    catch_unwind_safe(move || {
         // Normalize Edition 2023 descriptors to proto3 for prost-reflect compatibility.
         let normalized = normalize_edition_descriptor_set(&fdset_bytes);
 
@@ -139,7 +148,7 @@ fn run_test_case(
         Err(err) => return runtime_error(format!("failed to decode message: {err}")),
     };
 
-    match catch_unwind_silent(|| validator.validate(&dynamic)) {
+    match catch_unwind_safe(|| validator.validate(&dynamic)) {
         Ok(Ok(())) => success(),
         Ok(Err(Error::Validation(err))) => validation_error(err.to_proto()),
         Ok(Err(Error::Compilation(err))) => compilation_error(err.cause),
@@ -203,13 +212,9 @@ fn panic_message(panic: &(dyn Any + Send)) -> String {
     }
 }
 
-fn catch_unwind_silent<F, T>(f: F) -> Result<T, Box<dyn Any + Send>>
+fn catch_unwind_safe<F, T>(f: F) -> Result<T, Box<dyn Any + Send>>
 where
     F: FnOnce() -> T,
 {
-    let hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
-    let result = panic::catch_unwind(AssertUnwindSafe(f));
-    panic::set_hook(hook);
-    result
+    catch_unwind(AssertUnwindSafe(f))
 }

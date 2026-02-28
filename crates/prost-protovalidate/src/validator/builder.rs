@@ -5,13 +5,14 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use prost::Message;
 use prost::encoding::{WireType, decode_key, decode_varint, encode_key, encode_varint};
-use prost_protovalidate_types::{
-    FieldConstraintsDynExt, FieldConstraintsExt, FieldRules, Ignore, MessageConstraintsExt,
-    MessageRules, OneofConstraintsExt, field_rules,
-};
 use prost_reflect::{
     DescriptorPool, DynamicMessage, ExtensionDescriptor, FieldDescriptor, MessageDescriptor,
     ReflectMessage, Value,
+};
+
+use prost_protovalidate_types::{
+    FieldConstraintsDynExt, FieldConstraintsExt, FieldRules, Ignore, MessageConstraintsExt,
+    MessageRules, OneofConstraintsExt, field_rules,
 };
 
 use crate::error::CompilationError;
@@ -52,6 +53,24 @@ pub(crate) struct Builder {
 }
 
 impl Builder {
+    fn read_cache(&self) -> std::sync::RwLockReadGuard<'_, HashMap<String, Arc<MessageEval>>> {
+        self.cache
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn write_cache(&self) -> std::sync::RwLockWriteGuard<'_, HashMap<String, Arc<MessageEval>>> {
+        self.cache
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn lock_build(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.build_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     pub fn new() -> Self {
         Self::with_config(true, false, &[])
     }
@@ -86,10 +105,7 @@ impl Builder {
 
         // Fast path
         {
-            let cache = self
-                .cache
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let cache = self.read_cache();
             if let Some(eval) = cache.get(&key) {
                 return Arc::clone(eval);
             }
@@ -104,38 +120,18 @@ impl Builder {
         }
 
         // Slow path
-        let _guard = self
-            .build_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = self.lock_build();
 
         {
-            let cache = self
-                .cache
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let cache = self.read_cache();
             if let Some(eval) = cache.get(&key) {
                 return Arc::clone(eval);
             }
         }
 
-        let mut local_cache = {
-            let cache = self
-                .cache
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.clone()
-        };
-
+        let mut local_cache = self.read_cache().clone();
         let eval = self.build(desc, &mut local_cache);
-
-        {
-            let mut cache = self
-                .cache
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *cache = local_cache;
-        }
+        *self.write_cache() = local_cache;
 
         eval
     }
@@ -147,43 +143,18 @@ impl Builder {
         }
 
         let key = desc.full_name().to_string();
-        {
-            let cache = self
-                .cache
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if cache.contains_key(&key) {
-                return;
-            }
+        if self.read_cache().contains_key(&key) {
+            return;
         }
 
-        let _guard = self
-            .build_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        {
-            let cache = self
-                .cache
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if cache.contains_key(&key) {
-                return;
-            }
+        let _guard = self.lock_build();
+        if self.read_cache().contains_key(&key) {
+            return;
         }
 
-        let mut local_cache = {
-            let cache = self
-                .cache
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            cache.clone()
-        };
+        let mut local_cache = self.read_cache().clone();
         let _ = self.build(desc, &mut local_cache);
-        let mut cache = self
-            .cache
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *cache = local_cache;
+        *self.write_cache() = local_cache;
     }
 
     /// Build an evaluator for a message descriptor.
@@ -236,7 +207,10 @@ impl Builder {
             Self::process_message_oneof_rules(desc, rules, msg_eval);
         }
 
-        Self::process_oneof_rules(desc, msg_eval);
+        if let Err(err) = Self::process_oneof_rules(desc, msg_eval) {
+            msg_eval.set_err(err);
+            return;
+        }
         self.process_fields(desc, msg_rules.as_ref(), msg_eval, cache);
     }
 
@@ -299,16 +273,27 @@ impl Builder {
         }
     }
 
-    fn process_oneof_rules(desc: &MessageDescriptor, msg_eval: &Arc<MessageEval>) {
+    fn process_oneof_rules(
+        desc: &MessageDescriptor,
+        msg_eval: &Arc<MessageEval>,
+    ) -> Result<(), CompilationError> {
         for oneof in desc.oneofs() {
             if oneof.is_synthetic() {
                 continue;
             }
+            let required = oneof.try_is_required().map_err(|err| CompilationError {
+                cause: format!(
+                    "failed to decode oneof rules for {}.{}: {err}",
+                    desc.full_name(),
+                    oneof.name()
+                ),
+            })?;
             msg_eval.append_nested(Box::new(OneofEval {
                 descriptor: oneof.clone(),
-                required: oneof.is_required(),
+                required,
             }));
         }
+        Ok(())
     }
 
     fn process_fields(
@@ -481,6 +466,7 @@ impl Builder {
         }
         val_eval.rule_metadata = collect_rule_metadata(field_rules_dynamic);
         validate_rule_type_matches_field(fdesc, field_rules, nested)?;
+        validate_repeated_unique_rule_type(fdesc, field_rules, nested)?;
         Self::process_ignore_empty(fdesc, ignore, val_eval, nested);
         Self::process_field_expressions(field_rules, val_eval)?;
         self.process_embedded_message(fdesc, val_eval, cache, nested)?;
@@ -1005,6 +991,35 @@ fn validate_rule_type_matches_field(
     }
 }
 
+fn validate_repeated_unique_rule_type(
+    field_desc: &FieldDescriptor,
+    rules: &FieldRules,
+    nested: bool,
+) -> Result<(), CompilationError> {
+    if nested {
+        return Ok(());
+    }
+
+    let Some(field_rules::Type::Repeated(repeated)) = &rules.r#type else {
+        return Ok(());
+    };
+
+    if !repeated.unique.unwrap_or(false) {
+        return Ok(());
+    }
+
+    if field_desc.kind().as_message().is_some() {
+        return Err(CompilationError {
+            cause: format!(
+                "repeated.unique is only supported for scalar and enum item types; `{}` has message items",
+                field_desc.full_name()
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 /// Check whether a field is part of a message-level oneof rule.
 fn is_part_of_message_oneof(msg_rules: Option<&MessageRules>, field: &FieldDescriptor) -> bool {
     let Some(rules) = msg_rules else {
@@ -1399,26 +1414,7 @@ fn value_contains_unknown_fields(value: &Value) -> bool {
 fn extension_path_element(
     ext: &ExtensionDescriptor,
 ) -> prost_protovalidate_types::FieldPathElement {
-    use prost_reflect::Kind;
-    let field_type = match ext.kind() {
-        Kind::Double => prost_types::field_descriptor_proto::Type::Double,
-        Kind::Float => prost_types::field_descriptor_proto::Type::Float,
-        Kind::Int64 => prost_types::field_descriptor_proto::Type::Int64,
-        Kind::Uint64 => prost_types::field_descriptor_proto::Type::Uint64,
-        Kind::Int32 => prost_types::field_descriptor_proto::Type::Int32,
-        Kind::Fixed64 => prost_types::field_descriptor_proto::Type::Fixed64,
-        Kind::Fixed32 => prost_types::field_descriptor_proto::Type::Fixed32,
-        Kind::Bool => prost_types::field_descriptor_proto::Type::Bool,
-        Kind::String => prost_types::field_descriptor_proto::Type::String,
-        Kind::Message(_) => prost_types::field_descriptor_proto::Type::Message,
-        Kind::Bytes => prost_types::field_descriptor_proto::Type::Bytes,
-        Kind::Uint32 => prost_types::field_descriptor_proto::Type::Uint32,
-        Kind::Enum(_) => prost_types::field_descriptor_proto::Type::Enum,
-        Kind::Sfixed32 => prost_types::field_descriptor_proto::Type::Sfixed32,
-        Kind::Sfixed64 => prost_types::field_descriptor_proto::Type::Sfixed64,
-        Kind::Sint32 => prost_types::field_descriptor_proto::Type::Sint32,
-        Kind::Sint64 => prost_types::field_descriptor_proto::Type::Sint64,
-    };
+    let field_type = crate::violation::kind_to_descriptor_type(&ext.kind());
     prost_protovalidate_types::FieldPathElement {
         field_number: i32::try_from(ext.number()).ok(),
         field_name: Some(format!("[{}]", ext.full_name())),
@@ -1488,6 +1484,8 @@ fn compile_predefined_rule_programs(
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+
     use super::*;
 
     fn descriptor_field(message: &str, field: &str) -> FieldDescriptor {
@@ -1552,6 +1550,32 @@ mod tests {
 
         let eval = builder.build_field(&field, Some(&rules), None, None, &mut cache);
         assert!(eval.err.is_some());
+    }
+
+    #[test]
+    fn build_field_rejects_repeated_unique_for_message_items() {
+        let field = descriptor_field("buf.validate.FieldRules", "cel");
+        assert!(field.is_list());
+        assert!(field.kind().as_message().is_some());
+
+        let builder = Builder::new();
+        let mut cache = HashMap::new();
+        let rules = FieldRules {
+            r#type: Some(field_rules::Type::Repeated(Box::new(
+                prost_protovalidate_types::RepeatedRules {
+                    unique: Some(true),
+                    ..Default::default()
+                },
+            ))),
+            ..FieldRules::default()
+        };
+
+        let eval = builder.build_field(&field, Some(&rules), None, None, &mut cache);
+        let Some(err) = eval.err else {
+            panic!("expected repeated.unique type mismatch");
+        };
+        assert!(err.cause.contains("repeated.unique is only supported"));
+        assert!(err.cause.contains("buf.validate.FieldRules.cel"));
     }
 
     #[test]

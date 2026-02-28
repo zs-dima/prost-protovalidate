@@ -1,8 +1,9 @@
+use std::sync::Arc;
+
 use prost_reflect::{
     DynamicMessage, FieldDescriptor, MessageDescriptor, OneofDescriptor, ReflectMessage,
 };
 use prost_types::Timestamp;
-use std::sync::Arc;
 
 /// Options for configuring the `Validator` at construction time.
 #[non_exhaustive]

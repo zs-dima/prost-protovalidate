@@ -58,6 +58,7 @@ pub(crate) fn is_message_field(desc: &prost_reflect::FieldDescriptor) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
     use prost_reflect::Kind;
 
     use super::{expected_standard_rule, expected_wkt_rule, expected_wrapper_rule};
