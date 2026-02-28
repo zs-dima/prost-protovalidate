@@ -65,9 +65,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: EmbarkStudios/cargo-deny-action@v2
-        with:
-          command: check
+      - uses: taiki-e/install-action@cargo-deny
+      - run: cargo deny check
 
   conformance:
     name: Conformance
@@ -79,6 +78,7 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: stable
+          cache: false # no go.mod in this repo; Go is only used to install the conformance harness
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: make conformance
 
