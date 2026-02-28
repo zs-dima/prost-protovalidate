@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-28
+
+### Changed
+
+- **BREAKING** (`prost-protovalidate-types`): Synced `validate.proto` to upstream `buf.build/bufbuild/protovalidate` v1.1.1 — `string.protobuf_fqn` / `string.protobuf_dot_fqn` rules removed upstream, removing `string_rules::WellKnown::ProtobufFqn` and `::ProtobufDotFqn` enum variants from the generated types.
+- CEL error messages now use `"value must …"` prefix (upstream change in protovalidate v1.1.1).
+- Removed internal `WellKnownStringRule::ProtobufFqn` and `WellKnownStringRule::ProtobufDotFqn` variants.
+
 ## [0.2.0] - 2026-02-28
 
 ### Added
@@ -32,8 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgraded `fluent-uri` from 0.3 to 0.4.
 - Removed direct `serde` dependency (unused; `serde_json` retained).
 - Removed direct `anyhow` dependency.
-- Removed `WellKnownStringRule::ProtobufFqn` and `WellKnownStringRule::ProtobufDotFqn` variants — dropped upstream in protovalidate v1.1.1.
-- Synced `validate.proto` to upstream `buf.build/bufbuild/protovalidate` v1.1.1 (CEL error messages now use `"value must …"` prefix; `string.protobuf_fqn` / `string.protobuf_dot_fqn` rules removed).
 - Deduplicated `prepend_rule_prefix` into `evaluator::mod.rs`.
 - Deduplicated `kind_to_descriptor_type` between `violation.rs` and `builder.rs`.
 - Conformance executor: extracted `run()` from `main()`, replaced `expect()` with `Result` propagation.
@@ -59,5 +65,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-call validation options (`FailFast`, `Filter`, `NowFn`).
 - Validator construction options (`DisableLazy`, `AdditionalDescriptorSetBytes`, `MessageDescriptors`).
 
+[0.3.0]: https://github.com/zs-dima/prost-protovalidate/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/zs-dima/prost-protovalidate/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/zs-dima/prost-protovalidate/releases/tag/v0.1.0

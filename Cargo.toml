@@ -4,7 +4,7 @@ resolver = "3"
 exclude = [".github", "bacon.toml", "deny.toml"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 authors = ["prost-protovalidate contributors"]
 edition = "2024"
 rust-version = "1.86"
@@ -30,8 +30,8 @@ prost-build = "0.14"
 prost-reflect = { version = "0.16", features = ["derive", "serde"] }
 prost-reflect-build = "0.16"
 
-prost-protovalidate-types = { package = "prost-protovalidate-types", path = "crates/prost-protovalidate-types", version = "=0.2.0" }
-prost-protovalidate = { package = "prost-protovalidate", path = "crates/prost-protovalidate", version = "=0.2.0" }
+prost-protovalidate-types = { package = "prost-protovalidate-types", path = "crates/prost-protovalidate-types", version = "=0.3.0" }
+prost-protovalidate = { package = "prost-protovalidate", path = "crates/prost-protovalidate", version = "=0.3.0" }
 
 # Error handling
 thiserror = "2.0"

@@ -581,7 +581,7 @@ dependencies = [
 
 [[package]]
 name = "prost-protovalidate"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cel",
  "chrono",
@@ -599,7 +599,7 @@ dependencies = [
 
 [[package]]
 name = "prost-protovalidate-conformance"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "prost",
  "prost-build",
@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "prost-protovalidate-types"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "pretty_assertions",
  "prost",
