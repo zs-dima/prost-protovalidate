@@ -31,7 +31,7 @@ Add the dependencies to your `Cargo.toml`:
 ```toml
 [dependencies]
 prost = "0.14"
-prost-protovalidate = "0.1"
+prost-protovalidate = "0.3"
 ```
 
 ### Usage
@@ -79,7 +79,7 @@ validator.validate(&request)?;
 
 | prost-protovalidate | prost | prost-reflect | MSRV |
 | ------------------- | ----- | ------------- | ---- |
-| 0.1.x               | 0.14  | 0.16          | 1.86 |
+| 0.3.x               | 0.14  | 0.16          | 1.86 |
 
 ## Conformance
 

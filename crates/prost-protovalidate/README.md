@@ -14,7 +14,7 @@ Dynamically inspects `prost-reflect` message descriptors, compiles `buf.validate
 ```toml
 [dependencies]
 prost = "0.14"
-prost-protovalidate = "0.1"
+prost-protovalidate = "0.3"
 ```
 
 Annotate your `.proto` files with `buf.validate` rules:
@@ -66,7 +66,7 @@ validator.validate(&request)?;
 
 | prost-protovalidate | prost | prost-reflect | MSRV |
 | ------------------- | ----- | ------------- | ---- |
-| 0.1.x               | 0.14  | 0.16          | 1.86 |
+| 0.3.x               | 0.14  | 0.16          | 1.86 |
 
 ## License
 
