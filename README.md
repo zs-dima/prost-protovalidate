@@ -14,6 +14,7 @@ Runtime validation for Protocol Buffer messages using [buf.validate](https://git
 - **Proto as single source of truth** — Define validation rules inside `.proto` files using `buf.validate` and enforce them automatically in Rust.
 - **Runtime validation** — Leverages `prost-reflect` to dynamically inspect message fields and evaluate complex validation rules at runtime.
 - **CEL Evaluation** — Fully supports compiling and evaluating Common Expression Language (CEL) conditions for cross-field or complex constraints.
+- **Edition 2023 support** — Normalizes Edition 2023 descriptors (including `DELIMITED` group encoding) so `prost-reflect` 0.16 handles them correctly.
 - **Modular Crates** — Clear separation between raw protobuf types (`prost-protovalidate-types`) and the runtime validation engine (`prost-protovalidate`).
 
 ## Crates
@@ -82,6 +83,8 @@ validator.validate(&request)?;
 
 ## Conformance
 
+Full conformance with the bufbuild protovalidate test suite: **2854/2854 tests pass** (0 expected failures).
+
 Conformance uses a pinned upstream harness from
 `github.com/bufbuild/protovalidate/tools/protovalidate-conformance`.
 
@@ -95,8 +98,7 @@ Pinned versions are defined in the repository root `Makefile`:
 1. Bump `PROTOVALIDATE_TOOLS_VERSION` and `PROTOVALIDATE_SCHEMA_REF` in `Makefile`.
 2. Sync `validate.proto` using the workflow in
    `crates/prost-protovalidate-types/SYNC.md`.
-3. Refresh and validate conformance:
-   - `make conformance-refresh-expected`
+3. Run conformance and update `expected_failures.yaml` with any new failures:
    - `make conformance`
 4. Run regression tests:
    - `cargo test --all-features`

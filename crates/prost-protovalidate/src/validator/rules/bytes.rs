@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use regex::bytes::Regex as BytesRegex;
 
 use crate::config::ValidationConfig;
-use crate::error::{CompilationError, Error, ValidationError};
+use crate::error::{CompilationError, Error, RuntimeError, ValidationError};
 use crate::violation::Violation;
 
 pub(crate) struct BytesRuleEval {
@@ -134,6 +134,12 @@ impl BytesRuleEval {
         }
 
         if let Some(ref pat) = self.pattern {
+            if std::str::from_utf8(b).is_err() {
+                return Err(RuntimeError {
+                    cause: "value must be valid UTF-8 to apply regexp".to_string(),
+                }
+                .into());
+            }
             if !pat.is_match(b) {
                 violations.push(Violation::new(
                     "",
@@ -232,10 +238,10 @@ impl BytesRuleEval {
                 }
                 BytesWellKnown::Uuid => {
                     if b.is_empty() {
-                        violations.push(Violation::new(
+                        violations.push(Violation::new_constraint(
                             "",
                             "bytes.uuid_empty",
-                            "value is empty, which is not a valid UUID",
+                            "bytes.uuid",
                         ));
                     } else if b.len() != 16 {
                         violations.push(Violation::new(

@@ -28,7 +28,7 @@ serde_json = { workspace = true }
 serde = { workspace = true }
 chrono = { workspace = true }
 cel = { workspace = true }
-uriparse = { workspace = true }
+fluent-uri = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - 2026-02-21
+## [Unreleased]\n\n### Added\n\n- Edition 2023 `DELIMITED` (group) encoding support via `TYPE_MESSAGE` to `TYPE_GROUP` normalization in `editions.rs`.\n- Full conformance: 2854/2854 protovalidate tests pass (0 expected failures).\n\n## [0.1.0] - 2026-02-21
 
 ### Added
 

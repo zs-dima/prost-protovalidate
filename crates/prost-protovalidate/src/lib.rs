@@ -60,3 +60,7 @@ pub use config::{Filter, ValidationOption, ValidatorOption};
 pub use error::{CompilationError, Error, RuntimeError, ValidationError};
 pub use validator::{Validator, validate};
 pub use violation::Violation;
+
+/// Normalize protobuf Edition 2023 descriptors to proto3 format for
+/// compatibility with `prost-reflect` 0.16 which does not support editions.
+pub use validator::editions::normalize_edition_descriptor_set;

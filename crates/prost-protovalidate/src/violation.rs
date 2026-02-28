@@ -41,6 +41,9 @@ pub struct Violation {
 
     /// Wire-compatible violation payload.
     pub proto: prost_protovalidate_types::Violation,
+
+    /// Extension field path element for predefined rules, preserved across `sync_proto` calls.
+    extension_element: Option<FieldPathElement>,
 }
 
 impl Violation {
@@ -60,6 +63,32 @@ impl Violation {
             rule_descriptor: None,
             rule_value: None,
             proto: prost_protovalidate_types::Violation::default(),
+            extension_element: None,
+        };
+        out.sync_proto();
+        out
+    }
+
+    /// Create a violation for a standard constraint where `rule_path` (the proto
+    /// field path, e.g. `"string.email"`) may differ from `rule_id` (the
+    /// constraint identifier, e.g. `"string.email_empty"`).
+    /// The `message` field is intentionally left empty per the conformance spec.
+    pub(crate) fn new_constraint(
+        field_path: impl Into<String>,
+        rule_id: impl Into<String>,
+        rule_path: impl Into<String>,
+    ) -> Self {
+        let mut out = Self {
+            field_path: field_path.into(),
+            rule_path: rule_path.into(),
+            rule_id: rule_id.into(),
+            message: String::new(),
+            field_descriptor: None,
+            field_value: None,
+            rule_descriptor: None,
+            rule_value: None,
+            proto: prost_protovalidate_types::Violation::default(),
+            extension_element: None,
         };
         out.sync_proto();
         out
@@ -71,6 +100,18 @@ impl Violation {
         }
         self.proto.rule = parse_path(&self.rule_path);
         hydrate_rule_path(&mut self.proto.rule);
+        // Re-apply stored extension element metadata (field_number, field_type)
+        // that parse_path cannot reconstruct from the string representation.
+        if let (Some(ext), Some(path)) = (&self.extension_element, self.proto.rule.as_mut()) {
+            if let Some(ext_name) = &ext.field_name {
+                for el in &mut path.elements {
+                    if el.field_name.as_deref() == Some(ext_name) {
+                        el.field_number = ext.field_number;
+                        el.field_type = ext.field_type;
+                    }
+                }
+            }
+        }
         self.proto.rule_id = if self.rule_id.is_empty() {
             None
         } else {
@@ -90,6 +131,7 @@ impl Violation {
                 let subscript = normalize_subscript_for_descriptor(first.subscript.take(), desc);
                 *first = field_path_element_from_descriptor(desc);
                 first.subscript = subscript;
+                apply_map_metadata(first, desc);
             } else {
                 path.elements.push(field_path_element_from_descriptor(desc));
             }
@@ -119,6 +161,36 @@ impl Violation {
 
     pub(crate) fn with_rule_value(mut self, value: Value) -> Self {
         self.rule_value = Some(value);
+        self
+    }
+
+    /// Append an extension element to the rule path.
+    pub(crate) fn with_rule_extension_element(mut self, element: FieldPathElement) -> Self {
+        // Store the extension element so sync_proto can re-apply metadata.
+        self.extension_element = Some(element.clone());
+        // Update the string representation
+        if let Some(name) = &element.field_name {
+            if !self.rule_path.is_empty() {
+                self.rule_path.push('.');
+            }
+            self.rule_path.push_str(name);
+        }
+        // Append the element to the proto path
+        if let Some(path) = self.proto.rule.as_mut() {
+            path.elements.push(element);
+        } else {
+            self.proto.rule = Some(FieldPath {
+                elements: vec![element],
+            });
+        }
+        self
+    }
+
+    /// Strip the rule path so `proto.rule` is `None`.
+    /// Used for violations where only `rule_id` should be emitted (e.g. oneof, message-level CEL).
+    pub(crate) fn without_rule_path(mut self) -> Self {
+        self.rule_path.clear();
+        self.proto.rule = None;
         self
     }
 
@@ -164,7 +236,7 @@ impl Violation {
 }
 
 fn field_path_element_from_descriptor(desc: &FieldDescriptor) -> FieldPathElement {
-    let mut out = FieldPathElement {
+    FieldPathElement {
         field_number: i32::try_from(desc.number()).ok(),
         field_name: Some(desc.name().to_string()),
         field_type: Some(if desc.is_group() {
@@ -175,20 +247,32 @@ fn field_path_element_from_descriptor(desc: &FieldDescriptor) -> FieldPathElemen
         key_type: None,
         value_type: None,
         subscript: None,
-    };
-
-    if desc.is_map() {
-        if let Some(entry) = desc.kind().as_message() {
-            if let Some(key_field) = entry.get_field_by_name("key") {
-                out.key_type = Some(kind_to_descriptor_type(&key_field.kind()) as i32);
-            }
-            if let Some(value_field) = entry.get_field_by_name("value") {
-                out.value_type = Some(kind_to_descriptor_type(&value_field.kind()) as i32);
-            }
-        }
     }
+}
 
-    out
+/// Populate `key_type` / `value_type` on an element when it has a subscript
+/// and the underlying field is a map.
+fn apply_map_metadata(element: &mut FieldPathElement, desc: &FieldDescriptor) {
+    if desc.is_map() && element.subscript.is_some() {
+        let (key_type, value_type) = map_key_value_types(desc);
+        element.key_type = key_type;
+        element.value_type = value_type;
+    }
+}
+
+/// Extract the key and value field types for a map field descriptor.
+fn map_key_value_types(desc: &FieldDescriptor) -> (Option<i32>, Option<i32>) {
+    let kind = desc.kind();
+    let Some(entry) = kind.as_message() else {
+        return (None, None);
+    };
+    let key_type = entry
+        .get_field_by_name("key")
+        .map(|f| kind_to_descriptor_type(&f.kind()) as i32);
+    let value_type = entry
+        .get_field_by_name("value")
+        .map(|f| kind_to_descriptor_type(&f.kind()) as i32);
+    (key_type, value_type)
 }
 
 fn normalize_subscript_for_descriptor(
@@ -276,6 +360,7 @@ fn prepend_proto_field_path(
             let subscript = normalize_subscript_for_descriptor(first.subscript.take(), descriptor);
             *first = field_path_element_from_descriptor(descriptor);
             first.subscript = subscript;
+            apply_map_metadata(first, descriptor);
         } else {
             prefix
                 .elements
@@ -294,6 +379,12 @@ fn prepend_proto_field_path(
         if is_subscript_only_element(first_suffix) && last_prefix.subscript.is_none() {
             last_prefix.subscript.clone_from(&first_suffix.subscript);
             suffix.elements.remove(0);
+            // After merging the subscript, normalize it and populate map metadata.
+            if let Some(descriptor) = descriptor {
+                last_prefix.subscript =
+                    normalize_subscript_for_descriptor(last_prefix.subscript.take(), descriptor);
+                apply_map_metadata(last_prefix, descriptor);
+            }
         }
     }
 
@@ -318,6 +409,22 @@ fn parse_path(path: &str) -> Option<FieldPath> {
     let mut elements = Vec::new();
     for segment in split_segments(path) {
         let (name, subscripts) = split_name_and_subscripts(segment);
+
+        // When a segment is entirely a bracketed token that isn't a valid
+        // subscript (e.g. `[buf.validate.conformance.cases.ext_name]`),
+        // split_name_and_subscripts returns ("", []).  Treat the entire
+        // segment as an extension field name.
+        if name.is_empty()
+            && subscripts.is_empty()
+            && segment.starts_with('[')
+            && segment.ends_with(']')
+        {
+            elements.push(FieldPathElement {
+                field_name: Some(segment.to_string()),
+                ..FieldPathElement::default()
+            });
+            continue;
+        }
 
         if !name.is_empty() || subscripts.is_empty() {
             elements.push(FieldPathElement {
@@ -425,6 +532,13 @@ fn hydrate_rule_path(path: &mut Option<FieldPath>) {
         let Some(name) = element.field_name.as_deref() else {
             continue;
         };
+        // Extension field names are wrapped in brackets (e.g.
+        // `[buf.validate.conformance.cases.ext]`). They aren't regular
+        // fields so skip hydration — the builder already populated their
+        // field_number and field_type.
+        if name.starts_with('[') {
+            continue;
+        }
         let Some(field) = descriptor.get_field_by_name(name) else {
             break;
         };

@@ -62,45 +62,59 @@ impl ValueEval {
         cfg: &ValidationConfig,
         field_path: &str,
     ) -> Result<(), Error> {
+        let (direct, nested) = self.evaluate_value_split(msg, val, cfg, field_path);
         let mut acc: Option<Error> = None;
+        let (cont, new_acc) = error::merge_violations(acc, direct, cfg.fail_fast);
+        acc = new_acc;
+        if cont {
+            let (_, new_acc) = error::merge_violations(acc, nested, cfg.fail_fast);
+            acc = new_acc;
+        }
+        match acc {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
 
+    /// Evaluate direct rules and nested rules separately.
+    /// Returns `(direct_result, nested_result)`.
+    /// Direct rules are constraints defined on the value itself (standard rules, CEL, etc.).
+    /// Nested rules are embedded message validation, map items, list items.
+    pub fn evaluate_value_split(
+        &self,
+        msg: &DynamicMessage,
+        val: &Value,
+        cfg: &ValidationConfig,
+        field_path: &str,
+    ) -> (Result<(), Error>, Result<(), Error>) {
         // Check ignore-empty
         if self.ignore_empty {
             if let Some(ref zero) = self.zero {
                 if val == zero {
-                    return Ok(());
+                    return (Ok(()), Ok(()));
                 }
             }
         }
 
         // Apply direct rules
-        if !self.rules.is_empty() {
+        let direct = if self.rules.is_empty() {
+            Ok(())
+        } else {
             let result = self.rules.evaluate(msg, val, cfg);
             let result = prepend_field_path(result, field_path, &self.descriptor);
-            let result = enrich_violations(result, val, &self.rule_metadata);
-            let (cont, new_acc) = error::merge_violations(acc, result, cfg.fail_fast);
-            acc = new_acc;
-            if !cont {
-                return match acc {
-                    Some(err) => Err(err),
-                    None => Ok(()),
-                };
-            }
-        }
+            enrich_violations(result, val, &self.rule_metadata)
+        };
 
         // Apply nested rules (embedded messages, map items, list items)
-        if !self.nested_rules.is_empty() {
+        let nested = if self.nested_rules.is_empty() || (direct.is_err() && cfg.fail_fast) {
+            Ok(())
+        } else {
             let result = self.nested_rules.evaluate(msg, val, cfg);
             let result = prepend_field_path(result, field_path, &self.descriptor);
-            let result = enrich_violations(result, val, &self.rule_metadata);
-            let (_, new_acc) = error::merge_violations(acc, result, cfg.fail_fast);
-            acc = new_acc;
-        }
+            enrich_violations(result, val, &self.rule_metadata)
+        };
 
-        match acc {
-            Some(err) => Err(err),
-            None => Ok(()),
-        }
+        (direct, nested)
     }
 }
 

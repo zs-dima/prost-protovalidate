@@ -1,6 +1,5 @@
 .PHONY: fmt fmt-check lint test check doc pre-commit publish-dry publish clean \
-       conformance-build conformance-harness conformance conformance-verbose \
-       conformance-refresh-expected
+       conformance-build conformance-harness conformance conformance-verbose
 
 fmt:
 	cargo fmt --all
@@ -61,12 +60,6 @@ conformance: conformance-build conformance-harness
 
 conformance-verbose: conformance-build conformance-harness
 	$(CONFORMANCE_HARNESS) --expected_failures $(EXPECTED_FAILURES) -v $(CONFORMANCE_EXECUTOR)
-
-conformance-refresh-expected: conformance-build conformance-harness
-	go run ./scripts/update_expected_failures.go \
-		--harness $(CONFORMANCE_HARNESS) \
-		--executor $(CONFORMANCE_EXECUTOR) \
-		--expected $(EXPECTED_FAILURES)
 
 clean:
 	cargo clean

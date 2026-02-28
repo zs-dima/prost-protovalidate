@@ -27,6 +27,11 @@ pub(crate) struct FieldEval {
     /// Whether the field tracks presence (proto3 optional, oneof member, message field).
     pub has_presence: bool,
 
+    /// Whether the field is proto2-required or editions `LEGACY_REQUIRED`.
+    /// Such fields are always considered present on the wire,
+    /// so `required` is always satisfied and `ignore_empty` never triggers.
+    pub is_legacy_required: bool,
+
     /// The ignore behavior for this field.
     pub ignore: IgnoreMode,
 
@@ -80,8 +85,12 @@ impl MessageEvaluator for FieldEval {
             .into());
         }
 
+        // Legacy-required fields (proto2 required / editions LEGACY_REQUIRED)
+        // are always considered "present" on the wire.
+        let field_is_set = self.is_legacy_required || msg.has_field(field_desc);
+
         // Check required
-        if self.required && !msg.has_field(field_desc) {
+        if self.required && !field_is_set {
             return Err(ValidationError::single(
                 Violation::new(&field_name, "required", "value is required")
                     .with_rule_descriptor(REQUIRED_RULE_DESCRIPTOR.clone())
@@ -91,8 +100,8 @@ impl MessageEvaluator for FieldEval {
             .into());
         }
 
-        // Check ignore-empty
-        if self.should_ignore_empty() && !msg.has_field(field_desc) {
+        // Check ignore-empty: skip if field has presence, is unset, and not legacy-required
+        if self.should_ignore_empty() && !field_is_set {
             return Ok(());
         }
 

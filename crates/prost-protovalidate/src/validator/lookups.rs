@@ -1,7 +1,6 @@
 use prost_reflect::Kind;
 
 /// Maps a proto field kind to the expected oneof variant name in `FieldRules.type`.
-#[allow(dead_code)]
 pub(crate) fn expected_standard_rule(kind: &Kind) -> Option<&'static str> {
     match kind {
         Kind::Float => Some("float"),
@@ -25,7 +24,6 @@ pub(crate) fn expected_standard_rule(kind: &Kind) -> Option<&'static str> {
 }
 
 /// Maps a well-known type full name to the expected oneof variant name in `FieldRules.type`.
-#[allow(dead_code)]
 pub(crate) fn expected_wkt_rule(full_name: &str) -> Option<&'static str> {
     match full_name {
         "google.protobuf.Any" => Some("any"),

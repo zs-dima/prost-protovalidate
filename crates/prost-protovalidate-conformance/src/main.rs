@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 use std::panic::{self, AssertUnwindSafe};
 
 use prost::Message;
-use prost_protovalidate::{Error, Validator, ValidatorOption};
+use prost_protovalidate::{Error, Validator, ValidatorOption, normalize_edition_descriptor_set};
 use prost_reflect::{DescriptorPool, DynamicMessage};
 
 #[allow(clippy::doc_markdown)]
@@ -104,13 +104,16 @@ fn process_request(
 
 fn build_suite(fdset_bytes: Vec<u8>) -> Result<(DescriptorPool, Validator), String> {
     catch_unwind_silent(move || {
+        // Normalize Edition 2023 descriptors to proto3 for prost-reflect compatibility.
+        let normalized = normalize_edition_descriptor_set(&fdset_bytes);
+
         // Build a fresh dynamic decode pool from the suite descriptor set only.
         // Validator extension resolution uses AdditionalDescriptorSetBytes.
         let mut pool = DescriptorPool::new();
-        pool.decode_file_descriptor_set(fdset_bytes.as_slice())
+        pool.decode_file_descriptor_set(normalized.as_slice())
             .map_err(|e| format!("failed to decode descriptor pool: {e}"))?;
         let validator =
-            Validator::with_options(&[ValidatorOption::AdditionalDescriptorSetBytes(fdset_bytes)]);
+            Validator::with_options(&[ValidatorOption::AdditionalDescriptorSetBytes(normalized)]);
         Ok((pool, validator))
     })
     .unwrap_or_else(|p| Err(format!("panic during suite setup: {}", panic_message(&p))))

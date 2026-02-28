@@ -30,11 +30,9 @@ impl MessageEvaluator for OneofEval {
         let any_set = self.descriptor.fields().any(|field| msg.has_field(&field));
 
         if !any_set {
-            return Err(ValidationError::single(Violation::new(
-                self.descriptor.name(),
-                "required",
-                "exactly one field is required in oneof",
-            ))
+            return Err(ValidationError::single(
+                Violation::new(self.descriptor.name(), "required", "").without_rule_path(),
+            )
             .into());
         }
 
@@ -73,20 +71,26 @@ impl MessageEvaluator for MessageOneofEval {
         }
 
         if set_count > 1 {
-            return Err(ValidationError::single(Violation::new(
-                "",
-                "message.oneof",
-                format!("only one of {} can be set", self.field_names.join(", ")),
-            ))
+            return Err(ValidationError::single(
+                Violation::new(
+                    "",
+                    "message.oneof",
+                    format!("only one of {} can be set", self.field_names.join(", ")),
+                )
+                .without_rule_path(),
+            )
             .into());
         }
 
         if self.required && set_count == 0 {
-            return Err(ValidationError::single(Violation::new(
-                "",
-                "message.oneof",
-                format!("one of {} must be set", self.field_names.join(", ")),
-            ))
+            return Err(ValidationError::single(
+                Violation::new(
+                    "",
+                    "message.oneof",
+                    format!("one of {} must be set", self.field_names.join(", ")),
+                )
+                .without_rule_path(),
+            )
             .into());
         }
 

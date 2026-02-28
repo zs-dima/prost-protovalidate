@@ -17,6 +17,17 @@ use crate::violation::Violation;
 use super::super::rules::string as string_rules;
 use super::{Evaluator, MessageEvaluator};
 
+/// Controls how violations are generated for different CEL rule contexts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CelViolationMode {
+    /// Standard field-level: include message and rule path.
+    Field,
+    /// Message-level `cel` rules: only emit `constraint_id` (no message, no rule path).
+    MessageRule,
+    /// Message-level `cel_expression`: emit `constraint_id` and computed message, no rule path.
+    MessageExpression,
+}
+
 pub(crate) struct CelRuleProgram {
     pub rule_id: String,
     pub message: Option<String>,
@@ -26,6 +37,10 @@ pub(crate) struct CelRuleProgram {
     pub rules_binding: Option<CelValue>,
     pub rule_descriptor: Option<FieldDescriptor>,
     pub rule_value: Option<prost_reflect::Value>,
+    /// Extension field path element for predefined rule violations.
+    pub extension_element: Option<prost_protovalidate_types::FieldPathElement>,
+    /// Violation output mode (field-level vs message-level).
+    pub violation_mode: CelViolationMode,
 }
 
 impl CelRuleProgram {
@@ -71,33 +86,48 @@ impl CelRuleProgram {
 
         match value {
             CelValue::Bool(true) => Ok(None),
-            CelValue::Bool(false) => Ok(Some(
-                self.with_rule_metadata(
-                    Violation::new(
-                        "",
-                        self.rule_id.clone(),
-                        self.message
-                            .clone()
-                            .unwrap_or_else(|| "validation failed".to_string()),
-                    )
-                    .with_rule_path(self.rule_path.clone()),
-                ),
-            )),
+            CelValue::Bool(false) => match self.violation_mode {
+                CelViolationMode::MessageRule => Ok(Some(
+                    Violation::new("", self.rule_id.clone(), "").without_rule_path(),
+                )),
+                CelViolationMode::MessageExpression => {
+                    let message = format!("\"{}\" returned false", self.rule_id);
+                    Ok(Some(
+                        Violation::new("", self.rule_id.clone(), message).without_rule_path(),
+                    ))
+                }
+                CelViolationMode::Field => {
+                    let message = self.message.clone().unwrap_or_default();
+                    Ok(Some(
+                        self.with_rule_metadata(
+                            Violation::new("", self.rule_id.clone(), message)
+                                .with_rule_path(self.rule_path.clone()),
+                        ),
+                    ))
+                }
+            },
             CelValue::String(msg) => {
                 let msg = msg.as_ref().clone();
                 if msg.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(
-                        self.with_rule_metadata(
-                            Violation::new(
-                                "",
-                                self.rule_id.clone(),
-                                self.message.clone().unwrap_or(msg),
-                            )
-                            .with_rule_path(self.rule_path.clone()),
-                        ),
-                    ))
+                    match self.violation_mode {
+                        CelViolationMode::MessageRule => Ok(Some(
+                            Violation::new("", self.rule_id.clone(), "").without_rule_path(),
+                        )),
+                        CelViolationMode::MessageExpression => Ok(Some(
+                            Violation::new("", self.rule_id.clone(), msg).without_rule_path(),
+                        )),
+                        CelViolationMode::Field => {
+                            let message = self.message.clone().unwrap_or(msg);
+                            Ok(Some(
+                                self.with_rule_metadata(
+                                    Violation::new("", self.rule_id.clone(), message)
+                                        .with_rule_path(self.rule_path.clone()),
+                                ),
+                            ))
+                        }
+                    }
                 }
             }
             other => Err(RuntimeError {
@@ -118,6 +148,9 @@ impl CelRuleProgram {
         if let Some(rule_value) = &self.rule_value {
             violation = violation.with_rule_value(rule_value.clone());
         }
+        if let Some(ext_element) = &self.extension_element {
+            violation = violation.with_rule_extension_element(ext_element.clone());
+        }
         violation
     }
 }
@@ -129,6 +162,8 @@ fn build_cel_context() -> Context<'static> {
 }
 
 fn register_protovalidate_functions(ctx: &mut Context<'_>) {
+    // Override the built-in `int` to also handle Timestamp → seconds since epoch.
+    ctx.add_function("int", cel_int);
     ctx.add_function("unique", cel_unique);
     ctx.add_function("getField", cel_get_field);
     ctx.add_function("isNan", cel_is_nan);
@@ -142,6 +177,35 @@ fn register_protovalidate_functions(ctx: &mut Context<'_>) {
     ctx.add_function("isHostAndPort", cel_is_host_and_port);
     ctx.add_function("startsWith", cel_starts_with);
     ctx.add_function("endsWith", cel_ends_with);
+    ctx.add_function("format", cel_format);
+}
+
+/// Override of the built-in CEL `int()` function to add `Timestamp → i64` conversion
+/// (seconds since Unix epoch), which the upstream `cel` crate does not support.
+fn cel_int(
+    ftx: &FunctionContext<'_, '_>,
+    This(this): This<CelValue>,
+) -> Result<CelValue, CelExecutionError> {
+    match this {
+        CelValue::Timestamp(ts) => Ok(CelValue::Int(ts.timestamp())),
+        CelValue::String(v) => v
+            .parse::<i64>()
+            .map(CelValue::Int)
+            .map_err(|e| ftx.error(format!("string parse error: {e}"))),
+        CelValue::Float(v) => {
+            #[allow(clippy::cast_precision_loss)] // Boundary check; precision loss is acceptable.
+            if v > i64::MAX as f64 || v < i64::MIN as f64 {
+                return Err(ftx.error("integer overflow"));
+            }
+            #[allow(clippy::cast_possible_truncation)] // Truncating float to int is intentional.
+            Ok(CelValue::Int(v as i64))
+        }
+        CelValue::Int(v) => Ok(CelValue::Int(v)),
+        CelValue::UInt(v) => Ok(CelValue::Int(
+            v.try_into().map_err(|_| ftx.error("integer overflow"))?,
+        )),
+        v => Err(ftx.error(format!("cannot convert {v:?} to int"))),
+    }
 }
 
 fn call_args_without_this<'a>(
@@ -325,6 +389,86 @@ fn cel_ends_with(This(this): This<CelValue>, suffix: CelValue) -> Result<bool, C
     }
 }
 
+/// CEL `string.format(\[args\])` — simple `%s`/`%d`/`%f`/`%e`/`%x` placeholder replacement.
+fn cel_format(
+    This(this): This<CelValue>,
+    Arguments(args): Arguments,
+) -> Result<CelValue, CelExecutionError> {
+    let CelValue::String(template) = this else {
+        return Err(CelExecutionError::NoSuchOverload);
+    };
+    let arg_list: Vec<CelValue> = match args.first() {
+        Some(CelValue::List(list)) => list.as_ref().clone(),
+        _ => args.as_ref().clone(),
+    };
+    let mut result = String::new();
+    let mut arg_idx = 0;
+    let mut chars = template.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '%' {
+            if let Some(&spec) = chars.peek() {
+                chars.next();
+                if spec == '%' {
+                    result.push('%');
+                } else if arg_idx < arg_list.len() {
+                    let arg = &arg_list[arg_idx];
+                    arg_idx += 1;
+                    match spec {
+                        's' | 'e' | 'x' => result.push_str(&cel_value_to_string(arg)),
+                        'd' => match arg {
+                            CelValue::Int(v) => result.push_str(&v.to_string()),
+                            CelValue::UInt(v) => result.push_str(&v.to_string()),
+                            #[allow(clippy::cast_possible_truncation)]
+                            CelValue::Float(v) => result.push_str(&(*v as i64).to_string()),
+                            _ => result.push_str(&cel_value_to_string(arg)),
+                        },
+                        'f' => match arg {
+                            CelValue::Float(v) => {
+                                use std::fmt::Write;
+                                let _ = write!(result, "{v:.6}");
+                            }
+                            CelValue::Int(v) => {
+                                use std::fmt::Write;
+                                let _ = write!(result, "{v}.000000");
+                            }
+                            CelValue::UInt(v) => {
+                                use std::fmt::Write;
+                                let _ = write!(result, "{v}.000000");
+                            }
+                            _ => result.push_str(&cel_value_to_string(arg)),
+                        },
+                        _ => {
+                            result.push('%');
+                            result.push(spec);
+                        }
+                    }
+                } else {
+                    result.push('%');
+                    result.push(spec);
+                }
+            } else {
+                result.push('%');
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    Ok(CelValue::String(Arc::new(result)))
+}
+
+fn cel_value_to_string(v: &CelValue) -> String {
+    match v {
+        CelValue::String(s) => s.as_ref().clone(),
+        CelValue::Int(n) => n.to_string(),
+        CelValue::UInt(n) => n.to_string(),
+        CelValue::Float(n) => format!("{n}"),
+        CelValue::Bool(b) => b.to_string(),
+        CelValue::Bytes(b) => String::from_utf8_lossy(b).to_string(),
+        CelValue::Null => "null".to_string(),
+        _ => format!("{v:?}"),
+    }
+}
+
 fn timestamp_to_cel(ts: &Timestamp) -> Result<cel::Timestamp, RuntimeError> {
     if !(0..=999_999_999).contains(&ts.nanos) {
         return Err(RuntimeError {
@@ -421,6 +565,8 @@ pub(crate) fn compile_programs(
     simple_exprs: &[String],
     rules: &[prost_protovalidate_types::Rule],
     path_prefix: &str,
+    simple_mode: CelViolationMode,
+    rule_mode: CelViolationMode,
 ) -> Result<Vec<CelRuleProgram>, CompilationError> {
     let mut out = Vec::with_capacity(simple_exprs.len() + rules.len());
 
@@ -437,6 +583,8 @@ pub(crate) fn compile_programs(
             rules_binding: None,
             rule_descriptor: None,
             rule_value: None,
+            extension_element: None,
+            violation_mode: simple_mode,
         });
     }
 
@@ -458,6 +606,8 @@ pub(crate) fn compile_programs(
             rules_binding: None,
             rule_descriptor: None,
             rule_value: None,
+            extension_element: None,
+            violation_mode: rule_mode,
         });
     }
 
@@ -475,15 +625,13 @@ pub(crate) fn value_to_cel_value(
 }
 
 fn reflect_message_to_cel(msg: &DynamicMessage) -> Result<CelValue, RuntimeError> {
+    // Unwrap well-known wrapper types to their inner scalar value.
+    if let Some(cel) = try_unwrap_well_known_message(msg) {
+        return Ok(cel);
+    }
     let mut out: HashMap<CelKey, CelValue> = HashMap::new();
     for field in msg.descriptor().fields() {
         let has_field = msg.has_field(&field);
-        let is_proto3_optional = field
-            .containing_oneof()
-            .is_some_and(|oneof| oneof.is_synthetic());
-        if field.supports_presence() && !has_field && is_proto3_optional {
-            continue;
-        }
 
         let value = if has_field {
             reflect_value_to_cel(&msg.get_field(&field))?
@@ -501,17 +649,99 @@ fn reflect_message_to_cel(msg: &DynamicMessage) -> Result<CelValue, RuntimeError
     Ok(CelValue::Map(out.into()))
 }
 
+/// Unwrap well-known protobuf wrapper types, Duration, and Timestamp to native CEL values.
+fn try_unwrap_well_known_message(msg: &DynamicMessage) -> Option<CelValue> {
+    match msg.descriptor().full_name() {
+        "google.protobuf.BoolValue" => {
+            let v = msg
+                .get_field_by_name("value")
+                .is_some_and(|v| v.as_bool().unwrap_or(false));
+            Some(CelValue::Bool(v))
+        }
+        "google.protobuf.Int32Value" => {
+            let v = msg
+                .get_field_by_name("value")
+                .map_or(0, |v| v.as_i32().unwrap_or(0));
+            Some(CelValue::Int(i64::from(v)))
+        }
+        "google.protobuf.Int64Value" => {
+            let v = msg
+                .get_field_by_name("value")
+                .map_or(0, |v| v.as_i64().unwrap_or(0));
+            Some(CelValue::Int(v))
+        }
+        "google.protobuf.UInt32Value" => {
+            let v = msg
+                .get_field_by_name("value")
+                .map_or(0, |v| v.as_u32().unwrap_or(0));
+            Some(CelValue::UInt(u64::from(v)))
+        }
+        "google.protobuf.UInt64Value" => {
+            let v = msg
+                .get_field_by_name("value")
+                .map_or(0, |v| v.as_u64().unwrap_or(0));
+            Some(CelValue::UInt(v))
+        }
+        "google.protobuf.FloatValue" => {
+            let v = msg
+                .get_field_by_name("value")
+                .map_or(0.0, |v| v.as_f32().map_or(0.0, f64::from));
+            Some(CelValue::Float(v))
+        }
+        "google.protobuf.DoubleValue" => {
+            let v = msg
+                .get_field_by_name("value")
+                .map_or(0.0, |v| v.as_f64().unwrap_or(0.0));
+            Some(CelValue::Float(v))
+        }
+        "google.protobuf.StringValue" => {
+            let v = msg
+                .get_field_by_name("value")
+                .map_or_else(String::new, |v| v.as_str().unwrap_or("").to_string());
+            Some(CelValue::String(Arc::new(v)))
+        }
+        "google.protobuf.BytesValue" => {
+            let v = msg.get_field_by_name("value").map_or_else(Vec::new, |v| {
+                v.as_bytes().map_or_else(Vec::new, |b| b.to_vec())
+            });
+            Some(CelValue::Bytes(Arc::new(v)))
+        }
+        "google.protobuf.Duration" => {
+            let seconds = msg
+                .get_field_by_name("seconds")
+                .map_or(0i64, |v| v.as_i64().unwrap_or(0));
+            let nanos = msg
+                .get_field_by_name("nanos")
+                .map_or(0i32, |v| v.as_i32().unwrap_or(0));
+            let duration = chrono::TimeDelta::new(seconds, nanos.unsigned_abs())
+                .unwrap_or(chrono::TimeDelta::zero());
+            Some(CelValue::Duration(duration))
+        }
+        "google.protobuf.Timestamp" => {
+            let seconds = msg
+                .get_field_by_name("seconds")
+                .map_or(0i64, |v| v.as_i64().unwrap_or(0));
+            let nanos = msg
+                .get_field_by_name("nanos")
+                .map_or(0i32, |v| v.as_i32().unwrap_or(0));
+            #[allow(clippy::cast_sign_loss)]
+            let nanos_u32 = nanos.max(0) as u32;
+            if let Some(utc_dt) = chrono::DateTime::<Utc>::from_timestamp(seconds, nanos_u32) {
+                if let Some(offset) = FixedOffset::east_opt(0) {
+                    return Some(CelValue::Timestamp(utc_dt.with_timezone(&offset)));
+                }
+            }
+            // Fall through to Map representation if timestamp is invalid
+            None
+        }
+        _ => None,
+    }
+}
+
 fn absent_message_to_cel(message: &MessageDescriptor) -> Result<CelValue, RuntimeError> {
     let mut out: HashMap<CelKey, CelValue> = HashMap::new();
 
     for field in message.fields() {
-        let is_proto3_optional = field
-            .containing_oneof()
-            .is_some_and(|oneof| oneof.is_synthetic());
-        if field.supports_presence() && is_proto3_optional {
-            continue;
-        }
-
         let value = if field.kind().as_message().is_some() && !field.is_map() {
             // For absent nested messages, expose a shallow object so chained
             // selectors can read scalar defaults without infinite recursion.
@@ -665,7 +895,14 @@ mod tests {
 
     #[test]
     fn compile_programs_covers_empty_success_and_compile_failures() {
-        let empty = compile_programs(&[], &[], "cel").expect("empty compile should succeed");
+        let empty = compile_programs(
+            &[],
+            &[],
+            "cel",
+            CelViolationMode::Field,
+            CelViolationMode::Field,
+        )
+        .expect("empty compile should succeed");
         assert!(empty.is_empty());
 
         let ok_rules = vec![
@@ -680,7 +917,14 @@ mod tests {
                 ..prost_protovalidate_types::Rule::default()
             },
         ];
-        let compiled = compile_programs(&[], &ok_rules, "cel").expect("valid CEL rules compile");
+        let compiled = compile_programs(
+            &[],
+            &ok_rules,
+            "cel",
+            CelViolationMode::Field,
+            CelViolationMode::Field,
+        )
+        .expect("valid CEL rules compile");
         assert_eq!(compiled.len(), 2);
 
         let bad_syntax = vec![prost_protovalidate_types::Rule {
@@ -688,14 +932,32 @@ mod tests {
             expression: Some("!@#$%^&".to_string()),
             ..prost_protovalidate_types::Rule::default()
         }];
-        assert!(compile_programs(&[], &bad_syntax, "cel").is_err());
+        assert!(
+            compile_programs(
+                &[],
+                &bad_syntax,
+                "cel",
+                CelViolationMode::Field,
+                CelViolationMode::Field
+            )
+            .is_err()
+        );
 
         let missing_expression = vec![prost_protovalidate_types::Rule {
             id: Some("missing".to_string()),
             expression: None,
             ..prost_protovalidate_types::Rule::default()
         }];
-        assert!(compile_programs(&[], &missing_expression, "cel").is_err());
+        assert!(
+            compile_programs(
+                &[],
+                &missing_expression,
+                "cel",
+                CelViolationMode::Field,
+                CelViolationMode::Field
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -711,6 +973,8 @@ mod tests {
             rules_binding: None,
             rule_descriptor: None,
             rule_value: None,
+            extension_element: None,
+            violation_mode: CelViolationMode::Field,
         };
         let string_program = CelRuleProgram {
             rule_id: "bar".to_string(),
@@ -721,6 +985,8 @@ mod tests {
             rules_binding: None,
             rule_descriptor: None,
             rule_value: None,
+            extension_element: None,
+            violation_mode: CelViolationMode::Field,
         };
 
         let bool_violation = bool_program
@@ -746,6 +1012,8 @@ mod tests {
             rules_binding: None,
             rule_descriptor: None,
             rule_value: None,
+            extension_element: None,
+            violation_mode: CelViolationMode::Field,
         };
         assert!(matches!(
             invalid_type_program.evaluate_value_with_this(&prost_reflect::Value::Bool(false), &cfg),
@@ -782,5 +1050,56 @@ mod tests {
             panic!("expected validation error");
         };
         assert_eq!(fail_fast.violations.len(), 1);
+    }
+
+    // ---- cel_int unit tests ----
+
+    #[test]
+    fn cel_int_converts_timestamp_to_epoch_seconds() {
+        let ctx = build_cel_context();
+        let program =
+            Program::compile("int(timestamp('2023-01-01T00:00:00Z'))").expect("should compile");
+        let result = program.execute(&ctx).expect("should execute");
+        assert_eq!(result, CelValue::Int(1_672_531_200));
+    }
+
+    #[test]
+    fn cel_int_converts_string_to_int() {
+        let ctx = build_cel_context();
+        let program = Program::compile("int('42')").expect("should compile");
+        let result = program.execute(&ctx).expect("should execute");
+        assert_eq!(result, CelValue::Int(42));
+    }
+
+    #[test]
+    fn cel_int_converts_negative_string() {
+        let ctx = build_cel_context();
+        let program = Program::compile("int('-100')").expect("should compile");
+        let result = program.execute(&ctx).expect("should execute");
+        assert_eq!(result, CelValue::Int(-100));
+    }
+
+    #[test]
+    fn cel_int_truncates_float() {
+        let ctx = build_cel_context();
+        let program = Program::compile("int(3.9)").expect("should compile");
+        let result = program.execute(&ctx).expect("should execute");
+        assert_eq!(result, CelValue::Int(3));
+    }
+
+    #[test]
+    fn cel_int_passes_through_int() {
+        let ctx = build_cel_context();
+        let program = Program::compile("int(7)").expect("should compile");
+        let result = program.execute(&ctx).expect("should execute");
+        assert_eq!(result, CelValue::Int(7));
+    }
+
+    #[test]
+    fn cel_int_converts_uint_to_int() {
+        let ctx = build_cel_context();
+        let program = Program::compile("int(uint(5))").expect("should compile");
+        let result = program.execute(&ctx).expect("should execute");
+        assert_eq!(result, CelValue::Int(5));
     }
 }

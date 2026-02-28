@@ -8,6 +8,7 @@ pub(crate) mod map;
 pub(crate) mod message;
 pub(crate) mod oneof;
 pub(crate) mod value;
+pub(crate) mod wrapper;
 
 use prost_reflect::DynamicMessage;
 

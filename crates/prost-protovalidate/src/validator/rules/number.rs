@@ -62,6 +62,13 @@ macro_rules! float_rule_eval {
                     )])
                     .into());
                 }
+                // NaN fails all range comparisons — reject explicitly
+                if v.is_nan() && self.inner.has_range_constraint() {
+                    return Err(ValidationError::new(vec![
+                        self.inner.nan_range_violation($prefix),
+                    ])
+                    .into());
+                }
                 self.inner.evaluate(v, $prefix)
             }
         }
@@ -345,6 +352,38 @@ mod numeric_inner {
                 && self.gte.is_none()
                 && self.r#in.is_empty()
                 && self.not_in.is_empty()
+        }
+
+        /// Whether any range constraint (gt/gte/lt/lte) is set.
+        pub fn has_range_constraint(&self) -> bool {
+            self.gt.is_some() || self.gte.is_some() || self.lt.is_some() || self.lte.is_some()
+        }
+
+        /// Build the violation that NaN should produce for the first applicable range rule.
+        pub fn nan_range_violation(&self, prefix: &str) -> Violation {
+            // Determine the appropriate rule_id based on the combination of range constraints.
+            // Exclusive ranges (gt >= lt or gte > lte) use the `_exclusive` suffix.
+            let rule_id = match (&self.gt, &self.gte, &self.lt, &self.lte) {
+                (Some(gt), _, Some(lt), _) if *gt < *lt => format!("{prefix}.gt_lt"),
+                (Some(_), _, Some(_), _) => format!("{prefix}.gt_lt_exclusive"),
+                (Some(gt), _, _, Some(lte)) if *gt < *lte => format!("{prefix}.gt_lte"),
+                (Some(_), _, _, Some(_)) => format!("{prefix}.gt_lte_exclusive"),
+                (_, Some(gte), Some(lt), _) if *gte < *lt => format!("{prefix}.gte_lt"),
+                (_, Some(_), Some(_), _) => format!("{prefix}.gte_lt_exclusive"),
+                (_, Some(gte), _, Some(lte)) if *gte <= *lte => format!("{prefix}.gte_lte"),
+                (_, Some(_), _, Some(_)) => format!("{prefix}.gte_lte_exclusive"),
+                (Some(_), _, _, _) => format!("{prefix}.gt"),
+                (_, Some(_), _, _) => format!("{prefix}.gte"),
+                (_, _, Some(_), _) => format!("{prefix}.lt"),
+                (_, _, _, Some(_)) => format!("{prefix}.lte"),
+                _ => unreachable!("has_range_constraint was true"),
+            };
+            let rule_path = match (&self.gt, &self.gte) {
+                (Some(_), _) => format!("{prefix}.gt"),
+                (_, Some(_)) => format!("{prefix}.gte"),
+                _ => rule_id.clone(),
+            };
+            Violation::new("", &rule_id, "").with_rule_path(rule_path)
         }
 
         pub fn evaluate(&self, v: T, prefix: &str) -> Result<(), Error> {

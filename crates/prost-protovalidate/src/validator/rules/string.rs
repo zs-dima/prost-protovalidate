@@ -1,11 +1,9 @@
 use std::collections::HashSet;
 use std::net::{Ipv4Addr, Ipv6Addr};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use regex::Regex;
-use std::sync::LazyLock;
-use uriparse::{URI, URIReference};
 
 use crate::config::ValidationConfig;
 use crate::error::{CompilationError, Error, ValidationError};
@@ -26,20 +24,62 @@ static PROTOBUF_DOT_FQN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new("^\\.[A-Za-z_][A-Za-z_0-9]*(\\.[A-Za-z_][A-Za-z_0-9]*)*$")
         .expect("protobuf dot fqn regex must compile")
 });
-static HTTP_HEADER_NAME_STRICT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^:?[0-9a-zA-Z!#$%&\\'*+-.^_|~\\x60]+$")
-        .expect("strict HTTP header name regex must compile")
-});
-static HTTP_HEADER_NAME_LOOSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[^\\x00\\x0A\\x0D]+$").expect("loose HTTP header name regex must compile")
-});
-static HTTP_HEADER_VALUE_STRICT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[^\\x00-\\x08\\x0A-\\x1F\\x7F]*$")
-        .expect("strict HTTP header value regex must compile")
-});
-static HTTP_HEADER_VALUE_LOOSE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new("^[^\\x00\\x0A\\x0D]*$").expect("loose HTTP header value regex must compile")
-});
+/// Strict HTTP header name: token chars per RFC 7230's `token` rule.
+/// Allowed characters: `!#$%&'*+-.0-9A-Za-z^_``|~`, with optional `:` prefix for pseudo-headers.
+fn is_valid_http_header_name_strict(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    // Only ASCII
+    let bytes = s.as_bytes();
+    // Optional leading colon (pseudo-header), but `:` alone is not valid
+    let start = usize::from(bytes[0] == b':');
+    if start >= bytes.len() {
+        return false;
+    }
+    // Trailing colon is not allowed
+    if bytes[bytes.len() - 1] == b':' {
+        return false;
+    }
+    for &b in &bytes[start..] {
+        if !is_token_char(b) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Token characters per RFC 7230 §3.2.6
+fn is_token_char(b: u8) -> bool {
+    matches!(b,
+        b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' |
+        b'0'..=b'9' |
+        b'A'..=b'Z' |
+        b'^' | b'_' | b'`' |
+        b'a'..=b'z' |
+        b'|' | b'~'
+    )
+}
+
+/// Loose HTTP header name: any non-empty string without NUL, CR, or LF.
+fn is_valid_http_header_name_loose(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    !s.bytes().any(|b| b == 0x00 || b == 0x0A || b == 0x0D)
+}
+
+/// Strict HTTP header value: no NUL, control chars (0x00-0x08, 0x0A-0x1F), or DEL (0x7F).
+/// HT (0x09) IS allowed per RFC 7230.
+fn is_valid_http_header_value_strict(s: &str) -> bool {
+    !s.bytes()
+        .any(|b| matches!(b, 0x00..=0x08 | 0x0A..=0x1F | 0x7F))
+}
+
+/// Loose HTTP header value: no NUL, CR, or LF.
+fn is_valid_http_header_value_loose(s: &str) -> bool {
+    !s.bytes().any(|b| b == 0x00 || b == 0x0A || b == 0x0D)
+}
 
 pub(crate) struct StringRuleEval {
     r#const: Option<String>,
@@ -177,7 +217,7 @@ impl StringRuleEval {
                 violations.push(Violation::new(
                     "",
                     "string.min_len",
-                    format!("must be at least {min} characters"),
+                    format!("value length must be at least {min} characters"),
                 ));
             }
         }
@@ -186,7 +226,7 @@ impl StringRuleEval {
                 violations.push(Violation::new(
                     "",
                     "string.max_len",
-                    format!("must be at most {max} characters"),
+                    format!("value length must be at most {max} characters"),
                 ));
             }
         }
@@ -373,165 +413,163 @@ fn check_well_known(s: &str, rule: WellKnownStringRule, strict: bool) -> Option<
     match rule {
         WellKnownStringRule::Email => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.email_empty",
-                    "value is empty, which is not a valid email address",
+                    "string.email",
                 ));
             }
             if !is_email(s) {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.email",
-                    "must be a valid email address",
+                    "string.email",
                 ));
             }
         }
         WellKnownStringRule::Hostname => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.hostname_empty",
-                    "value is empty, which is not a valid hostname",
+                    "string.hostname",
                 ));
             }
             if !is_hostname(s) {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.hostname",
-                    "must be a valid hostname",
+                    "string.hostname",
                 ));
             }
         }
         WellKnownStringRule::Ip => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.ip_empty",
-                    "value is empty, which is not a valid IP address",
+                    "string.ip",
                 ));
             }
             if !is_ip(s) {
-                return Some(Violation::new(
-                    "",
-                    "string.ip",
-                    "must be a valid IP address",
-                ));
+                return Some(Violation::new_constraint("", "string.ip", "string.ip"));
             }
         }
         WellKnownStringRule::Ipv4 => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.ipv4_empty",
-                    "value is empty, which is not a valid IPv4 address",
+                    "string.ipv4",
                 ));
             }
             if Ipv4Addr::from_str(s).is_err() {
-                return Some(Violation::new(
-                    "",
-                    "string.ipv4",
-                    "must be a valid IPv4 address",
-                ));
+                return Some(Violation::new_constraint("", "string.ipv4", "string.ipv4"));
             }
         }
         WellKnownStringRule::Ipv6 => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.ipv6_empty",
-                    "value is empty, which is not a valid IPv6 address",
+                    "string.ipv6",
                 ));
             }
             if !is_ipv6(s) {
-                return Some(Violation::new(
-                    "",
-                    "string.ipv6",
-                    "must be a valid IPv6 address",
-                ));
+                return Some(Violation::new_constraint("", "string.ipv6", "string.ipv6"));
             }
         }
         WellKnownStringRule::Uri => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.uri_empty",
-                    "value is empty, which is not a valid URI",
+                    "string.uri",
                 ));
             }
             if !is_uri(s) {
-                return Some(Violation::new("", "string.uri", "must be a valid URI"));
+                return Some(Violation::new_constraint("", "string.uri", "string.uri"));
             }
         }
         WellKnownStringRule::UriRef => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.uri_ref_empty",
-                    "value is empty, which is not a valid URI reference",
+                    "string.uri_ref",
                 ));
             }
             if !is_uri_ref(s) {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.uri_ref",
-                    "must be a valid URI reference",
+                    "string.uri_ref",
                 ));
             }
         }
         WellKnownStringRule::Uuid => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.uuid_empty",
-                    "value is empty, which is not a valid UUID",
+                    "string.uuid",
                 ));
             }
             if !is_uuid(s) {
-                return Some(Violation::new("", "string.uuid", "must be a valid UUID"));
+                return Some(Violation::new_constraint("", "string.uuid", "string.uuid"));
             }
         }
         WellKnownStringRule::Tuuid => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.tuuid_empty",
-                    "value is empty, which is not a valid trimmed UUID",
+                    "string.tuuid",
                 ));
             }
             if !is_tuuid(s) {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.tuuid",
-                    "must be a valid trimmed UUID",
+                    "string.tuuid",
                 ));
             }
         }
         WellKnownStringRule::Address => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.address_empty",
-                    "value is empty, which is not a valid address",
+                    "string.address",
                 ));
             }
             if !is_hostname(s) && !is_ip(s) {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.address",
-                    "must be a valid hostname or IP address",
+                    "string.address",
                 ));
             }
         }
         WellKnownStringRule::IpWithPrefixLen
         | WellKnownStringRule::Ipv4WithPrefixLen
         | WellKnownStringRule::Ipv6WithPrefixLen => {
+            let (empty_id, rule_path) = match rule {
+                WellKnownStringRule::IpWithPrefixLen => {
+                    ("string.ip_with_prefixlen_empty", "string.ip_with_prefixlen")
+                }
+                WellKnownStringRule::Ipv4WithPrefixLen => (
+                    "string.ipv4_with_prefixlen_empty",
+                    "string.ipv4_with_prefixlen",
+                ),
+                WellKnownStringRule::Ipv6WithPrefixLen => (
+                    "string.ipv6_with_prefixlen_empty",
+                    "string.ipv6_with_prefixlen",
+                ),
+                _ => unreachable!(),
+            };
             if s.is_empty() {
-                return Some(Violation::new(
-                    "",
-                    "string.ip_with_prefixlen_empty",
-                    "value is empty, which is not a valid IP with prefix length",
-                ));
+                return Some(Violation::new_constraint("", empty_id, rule_path));
             }
             let valid = match rule {
                 WellKnownStringRule::IpWithPrefixLen => is_ip_prefix(s, IpVersion::Any, false),
@@ -540,33 +578,24 @@ fn check_well_known(s: &str, rule: WellKnownStringRule, strict: bool) -> Option<
                 _ => false,
             };
             if !valid {
-                let (rule_id, message) = match rule {
-                    WellKnownStringRule::IpWithPrefixLen => (
-                        "string.ip_with_prefixlen",
-                        "must be a valid IP with prefix length",
-                    ),
-                    WellKnownStringRule::Ipv4WithPrefixLen => (
-                        "string.ipv4_with_prefixlen",
-                        "must be a valid IPv4 address with prefix length",
-                    ),
-                    WellKnownStringRule::Ipv6WithPrefixLen => (
-                        "string.ipv6_with_prefixlen",
-                        "must be a valid IPv6 address with prefix length",
-                    ),
-                    _ => unreachable!("handled above"),
-                };
-                return Some(Violation::new("", rule_id, message));
+                return Some(Violation::new_constraint("", rule_path, rule_path));
             }
         }
         WellKnownStringRule::IpPrefix
         | WellKnownStringRule::Ipv4Prefix
         | WellKnownStringRule::Ipv6Prefix => {
+            let (empty_id, rule_path) = match rule {
+                WellKnownStringRule::IpPrefix => ("string.ip_prefix_empty", "string.ip_prefix"),
+                WellKnownStringRule::Ipv4Prefix => {
+                    ("string.ipv4_prefix_empty", "string.ipv4_prefix")
+                }
+                WellKnownStringRule::Ipv6Prefix => {
+                    ("string.ipv6_prefix_empty", "string.ipv6_prefix")
+                }
+                _ => unreachable!(),
+            };
             if s.is_empty() {
-                return Some(Violation::new(
-                    "",
-                    "string.ip_prefix_empty",
-                    "value is empty, which is not a valid IP prefix",
-                ));
+                return Some(Violation::new_constraint("", empty_id, rule_path));
             }
             let valid = match rule {
                 WellKnownStringRule::IpPrefix => is_ip_prefix(s, IpVersion::Any, true),
@@ -575,117 +604,99 @@ fn check_well_known(s: &str, rule: WellKnownStringRule, strict: bool) -> Option<
                 _ => false,
             };
             if !valid {
-                let (rule_id, message) = match rule {
-                    WellKnownStringRule::IpPrefix => {
-                        ("string.ip_prefix", "must be a valid IP prefix")
-                    }
-                    WellKnownStringRule::Ipv4Prefix => {
-                        ("string.ipv4_prefix", "must be a valid IPv4 prefix")
-                    }
-                    WellKnownStringRule::Ipv6Prefix => {
-                        ("string.ipv6_prefix", "must be a valid IPv6 prefix")
-                    }
-                    _ => unreachable!("handled above"),
-                };
-                return Some(Violation::new("", rule_id, message));
+                return Some(Violation::new_constraint("", rule_path, rule_path));
             }
         }
         WellKnownStringRule::HostAndPort => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.host_and_port_empty",
-                    "value is empty, which is not a valid host and port pair",
+                    "string.host_and_port",
                 ));
             }
             if !is_host_and_port(s, true) {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.host_and_port",
-                    "must be a valid host (hostname or IP address) and port pair",
+                    "string.host_and_port",
                 ));
             }
         }
         WellKnownStringRule::Ulid => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.ulid_empty",
-                    "value is empty, which is not a valid ULID",
+                    "string.ulid",
                 ));
             }
             if !is_ulid(s) {
-                return Some(Violation::new("", "string.ulid", "must be a valid ULID"));
+                return Some(Violation::new_constraint("", "string.ulid", "string.ulid"));
             }
         }
         WellKnownStringRule::ProtobufFqn => {
             if s.is_empty() {
-                return Some(
-                    Violation::new(
-                        "",
-                        "string.protobuf_fqn_empty",
-                        "value is empty, which is not a valid fully-qualified Protobuf name",
-                    )
-                    .with_rule_path("string.protobuf_fqn"),
-                );
+                return Some(Violation::new_constraint(
+                    "",
+                    "string.protobuf_fqn_empty",
+                    "string.protobuf_fqn",
+                ));
             }
             if !is_protobuf_fqn(s) {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.protobuf_fqn",
-                    "must be a valid fully-qualified Protobuf name",
+                    "string.protobuf_fqn",
                 ));
             }
         }
         WellKnownStringRule::ProtobufDotFqn => {
             if s.is_empty() {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.protobuf_dot_fqn_empty",
-                    "value is empty, which is not a valid fully-qualified Protobuf name with a leading dot",
-                )
-                .with_rule_path("string.protobuf_dot_fqn"));
+                    "string.protobuf_dot_fqn",
+                ));
             }
             if !is_protobuf_dot_fqn(s) {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.protobuf_dot_fqn",
-                    "must be a valid fully-qualified Protobuf name with a leading dot",
+                    "string.protobuf_dot_fqn",
                 ));
             }
         }
         WellKnownStringRule::HttpHeaderName => {
-            if s.is_empty() {
-                return Some(Violation::new(
-                    "",
-                    "string.well_known_regex.header_name_empty",
-                    "value is empty, which is not a valid HTTP header name",
-                ));
-            }
             let valid = if strict {
-                HTTP_HEADER_NAME_STRICT_REGEX.is_match(s)
+                is_valid_http_header_name_strict(s)
             } else {
-                HTTP_HEADER_NAME_LOOSE_REGEX.is_match(s)
+                is_valid_http_header_name_loose(s)
             };
             if !valid {
-                return Some(Violation::new(
+                let rule_id = if s.is_empty() {
+                    "string.well_known_regex.header_name_empty"
+                } else {
+                    "string.well_known_regex.header_name"
+                };
+                return Some(Violation::new_constraint(
                     "",
-                    "string.well_known_regex.header_name",
-                    "must be a valid HTTP header name",
+                    rule_id,
+                    "string.well_known_regex",
                 ));
             }
         }
         WellKnownStringRule::HttpHeaderValue => {
             let valid = if strict {
-                HTTP_HEADER_VALUE_STRICT_REGEX.is_match(s)
+                is_valid_http_header_value_strict(s)
             } else {
-                HTTP_HEADER_VALUE_LOOSE_REGEX.is_match(s)
+                is_valid_http_header_value_loose(s)
             };
             if !valid {
-                return Some(Violation::new(
+                return Some(Violation::new_constraint(
                     "",
                     "string.well_known_regex.header_value",
-                    "must be a valid HTTP header value",
+                    "string.well_known_regex",
                 ));
             }
         }
@@ -694,10 +705,45 @@ fn check_well_known(s: &str, rule: WellKnownStringRule, strict: bool) -> Option<
 }
 
 pub(crate) fn is_email(s: &str) -> bool {
-    EMAIL_REGEX.is_match(s)
+    if s != s.trim() || s.contains(char::is_whitespace) {
+        return false;
+    }
+    if !s.is_ascii() {
+        return false;
+    }
+    let Some((local, domain)) = s.split_once('@') else {
+        return false;
+    };
+    if local.is_empty() || domain.is_empty() {
+        return false;
+    }
+    // Reject quoted strings, comments, and mailbox format
+    if local.contains('"') || local.contains('(') || local.contains('<') {
+        return false;
+    }
+    // Local part: only unreserved characters
+    if !EMAIL_REGEX.is_match(s) {
+        return false;
+    }
+    // Domain must be a valid hostname (not IP literal)
+    if domain.starts_with('[') {
+        return false;
+    }
+    // Reject trailing dot in domain
+    if domain.ends_with('.') {
+        return false;
+    }
+    // Email domain: valid labels but no "last label must not be all digits" rule
+    is_email_domain(domain)
 }
 
 pub(crate) fn is_hostname(s: &str) -> bool {
+    if s != s.trim() {
+        return false;
+    }
+    if !s.is_ascii() {
+        return false;
+    }
     let s = s.strip_suffix('.').unwrap_or(s);
     if s.is_empty() || s.len() > 253 {
         return false;
@@ -726,49 +772,257 @@ pub(crate) fn is_hostname(s: &str) -> bool {
     true
 }
 
-pub(crate) fn is_ip(s: &str) -> bool {
-    Ipv4Addr::from_str(s).is_ok() || is_ipv6(s)
+/// Validate hostname labels for email domain (no "last label must not be all digits" rule).
+fn is_email_domain(s: &str) -> bool {
+    if s.is_empty() || s.len() > 253 {
+        return false;
+    }
+    for label in s.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return false;
+        }
+        if label.starts_with('-') || label.ends_with('-') {
+            return false;
+        }
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return false;
+        }
+    }
+    true
 }
 
-pub(crate) fn is_ipv6(s: &str) -> bool {
-    // Support zone identifiers (e.g., "fe80::1%eth0")
-    let addr = s.split('%').next().unwrap_or(s);
+pub(crate) fn is_ip(s: &str) -> bool {
+    if s.is_empty() || s != s.trim() {
+        return false;
+    }
+    is_ipv4_strict(s) || is_ipv6_any(s)
+}
+
+fn is_ipv4_strict(s: &str) -> bool {
+    if s != s.trim() {
+        return false;
+    }
+    Ipv4Addr::from_str(s).is_ok()
+}
+
+/// Parse IPv6, accepting zone IDs (e.g., `fe80::1%eth0`).
+fn is_ipv6_any(s: &str) -> bool {
+    if s != s.trim() {
+        return false;
+    }
+    // Split off zone ID
+    let (addr, zone) = match s.find('%') {
+        Some(idx) => (&s[..idx], Some(&s[idx + 1..])),
+        None => (s, None),
+    };
+    // Reject empty zone IDs
+    if let Some(z) = zone {
+        if z.is_empty() {
+            return false;
+        }
+    }
     Ipv6Addr::from_str(addr).is_ok()
 }
 
-pub(crate) fn is_uri(s: &str) -> bool {
-    if has_invalid_uri_scheme_prefix(s) {
+/// Strict IPv6 without zone IDs.
+fn is_ipv6_strict(s: &str) -> bool {
+    if s != s.trim() || s.contains('%') {
         return false;
     }
-    catch_unwind(AssertUnwindSafe(|| URI::try_from(s).is_ok())).unwrap_or(false)
+    Ipv6Addr::from_str(s).is_ok()
+}
+
+pub(crate) fn is_ipv6(s: &str) -> bool {
+    is_ipv6_any(s)
+}
+
+pub(crate) fn is_uri(s: &str) -> bool {
+    if !is_valid_uri_chars(s) {
+        return false;
+    }
+    // Try parsing directly first.
+    if let Ok(uri) = fluent_uri::Uri::parse(s) {
+        return is_valid_uri_host(&uri);
+    }
+    // fluent_uri doesn't support RFC 6874 IPv6 zone IDs.
+    // Strip the zone ID and retry.
+    if let Some(stripped) = strip_ipv6_zone_id(s) {
+        if let Ok(uri) = fluent_uri::Uri::parse(stripped.as_str()) {
+            return is_valid_uri_host(&uri);
+        }
+    }
+    false
 }
 
 pub(crate) fn is_uri_ref(s: &str) -> bool {
-    if has_invalid_uri_scheme_prefix(s) {
+    if !is_valid_uri_chars(s) {
         return false;
     }
-    catch_unwind(AssertUnwindSafe(|| URIReference::try_from(s).is_ok())).unwrap_or(false)
+    if let Ok(uri) = fluent_uri::UriRef::parse(s) {
+        return is_valid_uri_ref_host(&uri);
+    }
+    if let Some(stripped) = strip_ipv6_zone_id(s) {
+        if let Ok(uri) = fluent_uri::UriRef::parse(stripped.as_str()) {
+            return is_valid_uri_ref_host(&uri);
+        }
+    }
+    false
 }
 
-fn has_invalid_uri_scheme_prefix(s: &str) -> bool {
-    let Some(scheme_end) = s.find(':') else {
-        return false;
-    };
-
-    let first_hier_delim = s.find(|c| ['/', '?', '#'].contains(&c));
-    if first_hier_delim.is_some_and(|idx| idx < scheme_end) {
-        return false;
-    }
-
-    let scheme = &s[..scheme_end];
-    let mut bytes = scheme.bytes();
-    let Some(first) = bytes.next() else {
+/// Check that a parsed URI's host reg-name (if present) has valid pct-encoded UTF-8.
+fn is_valid_uri_host(uri: &fluent_uri::Uri<&str>) -> bool {
+    let Some(authority) = uri.authority() else {
         return true;
     };
-    if !first.is_ascii_alphabetic() {
+    is_valid_reg_name_utf8(authority.host())
+}
+
+/// Check that a parsed URI-reference's host reg-name has valid pct-encoded UTF-8.
+fn is_valid_uri_ref_host(uri: &fluent_uri::UriRef<&str>) -> bool {
+    let Some(authority) = uri.authority() else {
+        return true;
+    };
+    is_valid_reg_name_utf8(authority.host())
+}
+
+/// Validate that pct-decoded bytes in a reg-name host form valid UTF-8.
+/// IP-literal hosts (starting with `[`) are not checked.
+fn is_valid_reg_name_utf8(host: &str) -> bool {
+    // IP-literals are enclosed in brackets — skip UTF-8 check.
+    if host.starts_with('[') {
         return true;
     }
-    !bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.'))
+    let decoded = pct_decode_bytes(host);
+    std::str::from_utf8(&decoded).is_ok()
+}
+
+/// Decode percent-encoded bytes in a string. Non-pct-encoded ASCII bytes
+/// are passed through unchanged.
+fn pct_decode_bytes(s: &str) -> Vec<u8> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) =
+                (hex_digit_value(bytes[i + 1]), hex_digit_value(bytes[i + 2]))
+            {
+                out.push(hi << 4 | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    out
+}
+
+fn hex_digit_value(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Strip an IPv6 zone ID (RFC 6874) from a URI string.
+/// Zone IDs appear as `%25<zone>` inside `[...]` IP-literal hosts.
+/// Returns `None` if no zone ID is found, the zone ID is empty, or the
+/// zone ID contains invalid characters / invalid pct-encoded UTF-8.
+fn strip_ipv6_zone_id(s: &str) -> Option<String> {
+    let bracket_open = s.find('[')?;
+    let bracket_close = s[bracket_open..].find(']').map(|i| bracket_open + i)?;
+    let host_inner = &s[bracket_open + 1..bracket_close];
+    let zone_offset = host_inner.find("%25")?;
+    let zone_id = &host_inner[zone_offset + 3..];
+    // Reject empty zone IDs.
+    if zone_id.is_empty() {
+        return None;
+    }
+    // Validate zone ID characters: unreserved chars and valid pct-encoding.
+    if !is_valid_zone_id(zone_id) {
+        return None;
+    }
+    // Validate that pct-decoded zone ID is valid UTF-8.
+    if std::str::from_utf8(&pct_decode_bytes(zone_id)).is_err() {
+        return None;
+    }
+    // Reconstruct without the zone ID.
+    let mut result = String::with_capacity(s.len());
+    result.push_str(&s[..bracket_open + 1 + zone_offset]);
+    result.push(']');
+    result.push_str(&s[bracket_close + 1..]);
+    Some(result)
+}
+
+/// Validate zone ID characters per RFC 6874:
+/// `ZoneID = 1*( unreserved / pct-encoded )`
+fn is_valid_zone_id(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'%' {
+            // Must be valid pct-encoding.
+            if i + 2 >= bytes.len() {
+                return false;
+            }
+            if !bytes[i + 1].is_ascii_hexdigit() || !bytes[i + 2].is_ascii_hexdigit() {
+                return false;
+            }
+            i += 3;
+        } else if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            // unreserved
+            i += 1;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+/// Pre-validate URI characters per RFC 3986.
+/// Reject control characters, spaces, carets, and invalid percent-encoding.
+fn is_valid_uri_chars(s: &str) -> bool {
+    if s != s.trim() {
+        return false;
+    }
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        // Reject control characters (0x00-0x1F, 0x7F)
+        if b <= 0x1F || b == 0x7F {
+            return false;
+        }
+        // Reject space
+        if b == b' ' {
+            return false;
+        }
+        // Reject caret, backslash, backtick, curly braces, pipe
+        if matches!(b, b'^' | b'\\' | b'{' | b'}' | b'|') {
+            return false;
+        }
+        // Validate percent-encoding
+        if b == b'%' {
+            if i + 2 >= bytes.len() {
+                return false;
+            }
+            if !bytes[i + 1].is_ascii_hexdigit() || !bytes[i + 2].is_ascii_hexdigit() {
+                return false;
+            }
+            i += 3;
+            continue;
+        }
+        // Reject non-ASCII
+        if b > 0x7E {
+            return false;
+        }
+        i += 1;
+    }
+    true
 }
 
 fn is_uuid(s: &str) -> bool {
@@ -815,8 +1069,8 @@ enum IpVersion {
 pub(crate) fn is_ip_with_version(s: &str, version: i64) -> bool {
     match version {
         0 => is_ip(s),
-        4 => Ipv4Addr::from_str(s).is_ok(),
-        6 => is_ipv6(s),
+        4 => is_ipv4_strict(s),
+        6 => is_ipv6_strict(s),
         _ => false,
     }
 }
@@ -842,6 +1096,9 @@ fn is_ip_prefix(s: &str, version: IpVersion, strict: bool) -> bool {
 }
 
 fn is_ipv4_prefix(s: &str, strict: bool) -> bool {
+    if s != s.trim() {
+        return false;
+    }
     let Some((address, prefix_len)) = split_prefix(s) else {
         return false;
     };
@@ -855,13 +1112,20 @@ fn is_ipv4_prefix(s: &str, strict: bool) -> bool {
 }
 
 fn is_ipv6_prefix(s: &str, strict: bool) -> bool {
+    if s != s.trim() {
+        return false;
+    }
     let Some((address, prefix_len)) = split_prefix(s) else {
         return false;
     };
     if prefix_len > 128 {
         return false;
     }
-    let Ok(ip) = Ipv6Addr::from_str(address.split('%').next().unwrap_or(address)) else {
+    // Reject zone IDs in prefix notation
+    if address.contains('%') {
+        return false;
+    }
+    let Ok(ip) = Ipv6Addr::from_str(address) else {
         return false;
     };
     !strict || ipv6_is_prefix_only(ip, prefix_len)
@@ -903,7 +1167,7 @@ fn ipv6_is_prefix_only(ip: Ipv6Addr, prefix_len: u8) -> bool {
 }
 
 pub(crate) fn is_host_and_port(s: &str, port_required: bool) -> bool {
-    if s.is_empty() {
+    if s.is_empty() || s != s.trim() {
         return false;
     }
 
@@ -914,20 +1178,25 @@ pub(crate) fn is_host_and_port(s: &str, port_required: bool) -> bool {
         let host = &s[1..bracket_end];
         let after_host = &s[bracket_end + 1..];
         if after_host.is_empty() {
-            return !port_required && is_ipv6(host);
+            return !port_required && is_ipv6_any(host);
         }
         let Some(port) = after_host.strip_prefix(':') else {
             return false;
         };
-        return is_ipv6(host) && is_port(port);
+        return is_ipv6_any(host) && is_port(port);
+    }
+
+    // Reject bare names in brackets
+    if s.contains('[') || s.contains(']') {
+        return false;
     }
 
     let Some(split_idx) = s.rfind(':') else {
-        return !port_required && (is_hostname(s) || Ipv4Addr::from_str(s).is_ok());
+        return !port_required && (is_hostname(s) || is_ipv4_strict(s));
     };
     let host = &s[..split_idx];
     let port = &s[split_idx + 1..];
-    (is_hostname(host) || Ipv4Addr::from_str(host).is_ok()) && is_port(port)
+    (is_hostname(host) || is_ipv4_strict(host)) && is_port(port)
 }
 
 fn is_port(s: &str) -> bool {
@@ -1061,5 +1330,132 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- URI helper function unit tests ----
+
+    use super::{
+        hex_digit_value, is_valid_reg_name_utf8, is_valid_zone_id, pct_decode_bytes,
+        strip_ipv6_zone_id,
+    };
+
+    #[test]
+    fn hex_digit_value_maps_ascii_hex_chars() {
+        assert_eq!(hex_digit_value(b'0'), Some(0));
+        assert_eq!(hex_digit_value(b'9'), Some(9));
+        assert_eq!(hex_digit_value(b'a'), Some(10));
+        assert_eq!(hex_digit_value(b'f'), Some(15));
+        assert_eq!(hex_digit_value(b'A'), Some(10));
+        assert_eq!(hex_digit_value(b'F'), Some(15));
+        assert_eq!(hex_digit_value(b'g'), None);
+        assert_eq!(hex_digit_value(b'G'), None);
+        assert_eq!(hex_digit_value(b' '), None);
+        assert_eq!(hex_digit_value(b'%'), None);
+    }
+
+    #[test]
+    fn pct_decode_bytes_decodes_valid_sequences() {
+        assert_eq!(pct_decode_bytes("hello"), b"hello");
+        assert_eq!(pct_decode_bytes("%20"), b" ");
+        assert_eq!(pct_decode_bytes("a%20b"), b"a b");
+        assert_eq!(pct_decode_bytes("%C3%96"), b"\xC3\x96"); // Ö in UTF-8
+    }
+
+    #[test]
+    fn pct_decode_bytes_passes_through_malformed_sequences() {
+        // Incomplete pct-encoding at end
+        assert_eq!(pct_decode_bytes("%2"), b"%2");
+        assert_eq!(pct_decode_bytes("%"), b"%");
+        // Invalid hex digits
+        assert_eq!(pct_decode_bytes("%GG"), b"%GG");
+        // Empty string
+        assert_eq!(pct_decode_bytes(""), b"");
+    }
+
+    #[test]
+    fn is_valid_zone_id_accepts_unreserved_and_pct_encoded() {
+        assert!(is_valid_zone_id("eth0"));
+        assert!(is_valid_zone_id("en-0"));
+        assert!(is_valid_zone_id("my.iface"));
+        assert!(is_valid_zone_id("iface_1"));
+        assert!(is_valid_zone_id("a~b"));
+        assert!(is_valid_zone_id("%25")); // pct-encoded '%'
+        assert!(is_valid_zone_id("eth%250"));
+    }
+
+    #[test]
+    fn is_valid_zone_id_rejects_invalid_chars() {
+        // Note: empty string vacuously passes char validation;
+        // the empty check is in strip_ipv6_zone_id.
+        assert!(!is_valid_zone_id("eth 0")); // space
+        assert!(!is_valid_zone_id("eth[0")); // bracket
+        assert!(!is_valid_zone_id("eth/0")); // slash
+        assert!(!is_valid_zone_id("%G0")); // invalid hex
+        assert!(!is_valid_zone_id("%2")); // incomplete pct-encoding
+        assert!(!is_valid_zone_id("%")); // bare percent
+    }
+
+    #[test]
+    fn is_valid_reg_name_utf8_accepts_valid_hosts() {
+        assert!(is_valid_reg_name_utf8("example.com"));
+        assert!(is_valid_reg_name_utf8("[::1]")); // IP-literal skipped
+        assert!(is_valid_reg_name_utf8("foo%C3%96bar")); // valid UTF-8 pct-encoded
+        assert!(is_valid_reg_name_utf8("")); // empty reg-name is valid
+    }
+
+    #[test]
+    fn is_valid_reg_name_utf8_rejects_invalid_utf8() {
+        // %C3 alone is an incomplete UTF-8 sequence, but followed by 'x' (not valid continuation)
+        assert!(!is_valid_reg_name_utf8("foo%c3x%96"));
+        // Lone high byte
+        assert!(!is_valid_reg_name_utf8("%FF"));
+    }
+
+    #[test]
+    fn strip_ipv6_zone_id_removes_valid_zone() {
+        let input = "http://[fe80::1%25eth0]:8080/path";
+        let result = strip_ipv6_zone_id(input);
+        assert_eq!(result.as_deref(), Some("http://[fe80::1]:8080/path"));
+    }
+
+    #[test]
+    fn strip_ipv6_zone_id_returns_none_when_no_zone() {
+        assert!(strip_ipv6_zone_id("http://[::1]:80/path").is_none());
+        assert!(strip_ipv6_zone_id("http://example.com").is_none());
+        assert!(strip_ipv6_zone_id("no-brackets").is_none());
+    }
+
+    #[test]
+    fn strip_ipv6_zone_id_rejects_empty_zone() {
+        // %25 with nothing after it
+        assert!(strip_ipv6_zone_id("http://[fe80::1%25]:80/").is_none());
+    }
+
+    #[test]
+    fn strip_ipv6_zone_id_rejects_invalid_zone_chars() {
+        // Space in zone ID
+        assert!(strip_ipv6_zone_id("http://[fe80::1%25eth 0]:80/").is_none());
+    }
+
+    #[test]
+    fn strip_ipv6_zone_id_rejects_invalid_zone_utf8() {
+        // Zone ID with invalid UTF-8 pct-encoding
+        assert!(strip_ipv6_zone_id("http://[fe80::1%25%FF]:80/").is_none());
+    }
+
+    #[test]
+    fn uri_accepts_ipv6_with_valid_zone_id() {
+        assert!(is_uri("http://[fe80::1%25eth0]:8080/path"));
+        assert!(is_uri("http://[fe80::a%25en1]/"));
+    }
+
+    #[test]
+    fn uri_rejects_ipv6_with_empty_zone_id() {
+        assert!(!is_uri("http://[fe80::1%25]:8080/path"));
+    }
+
+    #[test]
+    fn uri_rejects_invalid_reg_name_utf8() {
+        assert!(!is_uri("https://foo%c3x%96/path"));
     }
 }

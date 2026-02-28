@@ -32,9 +32,18 @@ impl Evaluator for ListEval {
 
         for (i, item) in list.iter().enumerate() {
             let item_path = format!("[{i}]");
-            let result = self.item_rules.evaluate_value(msg, item, cfg, &item_path);
-            let result = prepend_rule_prefix(result, "repeated.items");
-            let (cont, new_acc) = error::merge_violations(acc, result, cfg.fail_fast);
+            let (direct, nested) = self
+                .item_rules
+                .evaluate_value_split(msg, item, cfg, &item_path);
+            // Only direct (item-level) violations get the "repeated.items" rule prefix.
+            // Nested (embedded message) violations keep their own rule paths.
+            let direct = prepend_rule_prefix(direct, "repeated.items");
+            let (cont, new_acc) = error::merge_violations(acc, direct, cfg.fail_fast);
+            acc = new_acc;
+            if !cont {
+                break;
+            }
+            let (cont, new_acc) = error::merge_violations(acc, nested, cfg.fail_fast);
             acc = new_acc;
             if !cont {
                 break;

@@ -17,10 +17,11 @@ use prost_reflect::{
 use crate::error::CompilationError;
 
 use super::evaluator::Evaluator;
+use super::evaluator::Evaluators;
 use super::evaluator::any::AnyEval;
 use super::evaluator::cel::{
-    CelFieldEval, CelMessageEval, CelRuleProgram, compile_programs, message_to_cel_value,
-    value_to_cel_value,
+    CelFieldEval, CelMessageEval, CelRuleProgram, CelViolationMode, compile_programs,
+    message_to_cel_value, value_to_cel_value,
 };
 use super::evaluator::embedded::EmbeddedMessageEval;
 use super::evaluator::enum_check::DefinedEnumEval;
@@ -30,6 +31,7 @@ use super::evaluator::map::MapEval;
 use super::evaluator::message::MessageEval;
 use super::evaluator::oneof::{MessageOneofEval, OneofEval};
 use super::evaluator::value::ValueEval;
+use super::evaluator::wrapper::WrapperEval;
 use super::lookups;
 use super::rules;
 
@@ -227,33 +229,35 @@ impl Builder {
         };
 
         if let Some(ref rules) = msg_rules {
-            if let Err(err) = self.process_message_expressions(rules, msg_eval) {
+            if let Err(err) = Self::process_message_expressions(rules, msg_eval) {
                 msg_eval.set_err(err);
                 return;
             }
-            self.process_message_oneof_rules(desc, rules, msg_eval);
+            Self::process_message_oneof_rules(desc, rules, msg_eval);
         }
 
-        self.process_oneof_rules(desc, msg_eval);
+        Self::process_oneof_rules(desc, msg_eval);
         self.process_fields(desc, msg_rules.as_ref(), msg_eval, cache);
     }
 
-    #[allow(clippy::unused_self)]
     fn process_message_expressions(
-        &self,
         msg_rules: &MessageRules,
         msg_eval: &Arc<MessageEval>,
     ) -> Result<(), CompilationError> {
-        let programs = compile_programs(&msg_rules.cel_expression, &msg_rules.cel, "cel")?;
+        let programs = compile_programs(
+            &msg_rules.cel_expression,
+            &msg_rules.cel,
+            "cel",
+            CelViolationMode::MessageExpression,
+            CelViolationMode::MessageRule,
+        )?;
         if !programs.is_empty() {
             msg_eval.append(Box::new(CelMessageEval { programs }));
         }
         Ok(())
     }
 
-    #[allow(clippy::unused_self)]
     fn process_message_oneof_rules(
-        &self,
         desc: &MessageDescriptor,
         msg_rules: &MessageRules,
         msg_eval: &Arc<MessageEval>,
@@ -295,8 +299,7 @@ impl Builder {
         }
     }
 
-    #[allow(clippy::unused_self)]
-    fn process_oneof_rules(&self, desc: &MessageDescriptor, msg_eval: &Arc<MessageEval>) {
+    fn process_oneof_rules(desc: &MessageDescriptor, msg_eval: &Arc<MessageEval>) {
         for oneof in desc.oneofs() {
             if oneof.is_synthetic() {
                 continue;
@@ -323,6 +326,7 @@ impl Builder {
                         value: ValueEval::new(field.clone()),
                         required: false,
                         has_presence: field.supports_presence(),
+                        is_legacy_required: field.is_required(),
                         ignore: IgnoreMode::Unspecified,
                         err: Some(err),
                     };
@@ -341,6 +345,7 @@ impl Builder {
                             value: ValueEval::new(field.clone()),
                             required: false,
                             has_presence: field.supports_presence(),
+                            is_legacy_required: field.is_required(),
                             ignore: IgnoreMode::Unspecified,
                             err: Some(CompilationError {
                                 cause: format!(
@@ -444,6 +449,7 @@ impl Builder {
                     value: value_eval,
                     required: field_rules.and_then(|r| r.required).unwrap_or(false),
                     has_presence: field_desc.supports_presence(),
+                    is_legacy_required: field_desc.is_required(),
                     ignore,
                     err: Some(err),
                 };
@@ -454,6 +460,7 @@ impl Builder {
             value: value_eval,
             required: field_rules.and_then(|r| r.required).unwrap_or(false),
             has_presence: field_desc.supports_presence(),
+            is_legacy_required: field_desc.is_required(),
             ignore,
             err: None,
         }
@@ -474,8 +481,8 @@ impl Builder {
         }
         val_eval.rule_metadata = collect_rule_metadata(field_rules_dynamic);
         validate_rule_type_matches_field(fdesc, field_rules, nested)?;
-        self.process_ignore_empty(fdesc, ignore, val_eval, nested);
-        self.process_field_expressions(field_rules, val_eval)?;
+        Self::process_ignore_empty(fdesc, ignore, val_eval, nested);
+        Self::process_field_expressions(field_rules, val_eval)?;
         self.process_embedded_message(fdesc, val_eval, cache, nested)?;
         self.process_wrapper_rules(
             fdesc,
@@ -485,10 +492,10 @@ impl Builder {
             cache,
             nested,
         )?;
-        self.process_standard_rules(fdesc, field_rules, val_eval, nested)?;
+        Self::process_standard_rules(fdesc, field_rules, val_eval, nested)?;
         self.process_predefined_rules(fdesc, field_rules_dynamic, val_eval, nested)?;
-        self.process_any_rules(fdesc, field_rules, val_eval, nested);
-        self.process_enum_rules(fdesc, field_rules, val_eval);
+        Self::process_any_rules(fdesc, field_rules, val_eval, nested);
+        Self::process_enum_rules(fdesc, field_rules, val_eval);
         self.process_map_rules(
             fdesc,
             field_rules,
@@ -508,9 +515,7 @@ impl Builder {
         Ok(())
     }
 
-    #[allow(clippy::unused_self)]
     fn process_ignore_empty(
-        &self,
         fdesc: &FieldDescriptor,
         ignore: IgnoreMode,
         val_eval: &mut ValueEval,
@@ -522,13 +527,17 @@ impl Builder {
             .then(|| nested_zero_value(fdesc, nested));
     }
 
-    #[allow(clippy::unused_self)]
     fn process_field_expressions(
-        &self,
         field_rules: &FieldRules,
         val_eval: &mut ValueEval,
     ) -> Result<(), CompilationError> {
-        let programs = compile_programs(&field_rules.cel_expression, &field_rules.cel, "cel")?;
+        let programs = compile_programs(
+            &field_rules.cel_expression,
+            &field_rules.cel,
+            "cel",
+            CelViolationMode::Field,
+            CelViolationMode::Field,
+        )?;
         if !programs.is_empty() {
             val_eval.push_rule(Box::new(CelFieldEval { programs }));
         }
@@ -614,16 +623,18 @@ impl Builder {
                 cache,
                 nested,
             )?;
-            val_eval.rules.0.extend(unwrapped.rules.0);
-            val_eval.nested_rules.0.extend(unwrapped.nested_rules.0);
+            let mut inner = Evaluators::new();
+            inner.0.extend(unwrapped.rules.0);
+            inner.0.extend(unwrapped.nested_rules.0);
+            if !inner.tautology() {
+                val_eval.push_rule(Box::new(WrapperEval { inner }));
+            }
         }
 
         Ok(())
     }
 
-    #[allow(clippy::unused_self)]
     fn process_standard_rules(
-        &self,
         fdesc: &FieldDescriptor,
         rules: &FieldRules,
         val_eval: &mut ValueEval,
@@ -667,7 +678,12 @@ impl Builder {
         let rules_binding = message_to_cel_value(&rule_message)?;
         let mut programs = Vec::new();
 
-        for (extension_desc, extension_value) in rule_message.extensions() {
+        // Reparse the rule message using the builder's pool so extension fields
+        // from user-provided descriptor sets become visible.
+        let reparsed = self.reparse_with_descriptor_pool(&rule_message)?;
+
+        // Process predefined rules from extension fields.
+        for (extension_desc, extension_value) in reparsed.extensions() {
             let predefined =
                 decode_predefined_from_extension(&extension_desc, &predefined_extension)?;
             if predefined.cel.is_empty() {
@@ -675,15 +691,19 @@ impl Builder {
             }
 
             let rule_binding = value_to_cel_value(extension_value)?;
+            let ext_element = extension_path_element(&extension_desc);
             let mut compiled = compile_predefined_rule_programs(
                 &predefined.cel,
                 rule_type.name(),
-                extension_desc.full_name(),
+                &format!("[{}]", extension_desc.full_name()),
                 &rule_binding,
                 &rules_binding,
                 None,
                 Some(extension_value),
             )?;
+            for prog in &mut compiled {
+                prog.extension_element = Some(ext_element.clone());
+            }
             programs.append(&mut compiled);
         }
 
@@ -694,9 +714,7 @@ impl Builder {
         Ok(())
     }
 
-    #[allow(clippy::unused_self)]
     fn process_any_rules(
-        &self,
         fdesc: &FieldDescriptor,
         rules: &FieldRules,
         val_eval: &mut ValueEval,
@@ -726,13 +744,7 @@ impl Builder {
         }
     }
 
-    #[allow(clippy::unused_self)]
-    fn process_enum_rules(
-        &self,
-        fdesc: &FieldDescriptor,
-        rules: &FieldRules,
-        val_eval: &mut ValueEval,
-    ) {
+    fn process_enum_rules(fdesc: &FieldDescriptor, rules: &FieldRules, val_eval: &mut ValueEval) {
         let enum_desc = match fdesc.kind().as_enum() {
             Some(e) => e.clone(),
             None => return,
@@ -1053,6 +1065,7 @@ fn build_descriptor_pool(
     }
 
     let combined_bytes = encode_file_descriptor_set(&combined_files);
+    let combined_bytes = super::editions::normalize_edition_descriptor_set(&combined_bytes);
     match decode_pool_from_bytes(combined_bytes.as_slice()) {
         Ok(pool) => (pool, None),
         Err(err) => {
@@ -1383,6 +1396,39 @@ fn value_contains_unknown_fields(value: &Value) -> bool {
     }
 }
 
+fn extension_path_element(
+    ext: &ExtensionDescriptor,
+) -> prost_protovalidate_types::FieldPathElement {
+    use prost_reflect::Kind;
+    let field_type = match ext.kind() {
+        Kind::Double => prost_types::field_descriptor_proto::Type::Double,
+        Kind::Float => prost_types::field_descriptor_proto::Type::Float,
+        Kind::Int64 => prost_types::field_descriptor_proto::Type::Int64,
+        Kind::Uint64 => prost_types::field_descriptor_proto::Type::Uint64,
+        Kind::Int32 => prost_types::field_descriptor_proto::Type::Int32,
+        Kind::Fixed64 => prost_types::field_descriptor_proto::Type::Fixed64,
+        Kind::Fixed32 => prost_types::field_descriptor_proto::Type::Fixed32,
+        Kind::Bool => prost_types::field_descriptor_proto::Type::Bool,
+        Kind::String => prost_types::field_descriptor_proto::Type::String,
+        Kind::Message(_) => prost_types::field_descriptor_proto::Type::Message,
+        Kind::Bytes => prost_types::field_descriptor_proto::Type::Bytes,
+        Kind::Uint32 => prost_types::field_descriptor_proto::Type::Uint32,
+        Kind::Enum(_) => prost_types::field_descriptor_proto::Type::Enum,
+        Kind::Sfixed32 => prost_types::field_descriptor_proto::Type::Sfixed32,
+        Kind::Sfixed64 => prost_types::field_descriptor_proto::Type::Sfixed64,
+        Kind::Sint32 => prost_types::field_descriptor_proto::Type::Sint32,
+        Kind::Sint64 => prost_types::field_descriptor_proto::Type::Sint64,
+    };
+    prost_protovalidate_types::FieldPathElement {
+        field_number: i32::try_from(ext.number()).ok(),
+        field_name: Some(format!("[{}]", ext.full_name())),
+        field_type: Some(field_type as i32),
+        key_type: None,
+        value_type: None,
+        subscript: None,
+    }
+}
+
 fn decode_predefined_from_extension(
     extension: &ExtensionDescriptor,
     predefined_extension: &ExtensionDescriptor,
@@ -1412,13 +1458,30 @@ fn compile_predefined_rule_programs(
     rule_descriptor: Option<&FieldDescriptor>,
     rule_value: Option<&Value>,
 ) -> Result<Vec<CelRuleProgram>, CompilationError> {
-    let path_prefix = format!("{rule_type_name}.{rule_field_name}");
-    let mut programs = compile_programs(&[], rules, &path_prefix)?;
-    for program in &mut programs {
-        program.rule_binding = Some(rule_binding.clone());
-        program.rules_binding = Some(rules_binding.clone());
-        program.rule_descriptor = rule_descriptor.cloned();
-        program.rule_value = rule_value.cloned();
+    // Use just the rule type name as the path prefix; the extension element
+    // will be appended to the violation's proto path separately.
+    let mut programs = Vec::with_capacity(rules.len());
+    for rule in rules {
+        let expr = rule.expression.clone().ok_or_else(|| CompilationError {
+            cause: format!(
+                "missing CEL expression in `{rule_type_name}.{rule_field_name}` predefined rule"
+            ),
+        })?;
+        let program = cel::Program::compile(&expr).map_err(|e| CompilationError {
+            cause: format!("failed to compile CEL rule `{expr}`: {e}"),
+        })?;
+        programs.push(CelRuleProgram {
+            rule_id: rule.id.clone().unwrap_or_else(|| expr.clone()),
+            message: rule.message.clone(),
+            rule_path: rule_type_name.to_string(),
+            program,
+            rule_binding: Some(rule_binding.clone()),
+            rules_binding: Some(rules_binding.clone()),
+            rule_descriptor: rule_descriptor.cloned(),
+            rule_value: rule_value.cloned(),
+            extension_element: None,
+            violation_mode: CelViolationMode::Field,
+        });
     }
     Ok(programs)
 }

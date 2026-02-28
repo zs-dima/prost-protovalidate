@@ -5,9 +5,9 @@ use crate::config::{NopFilter, ValidationConfig, ValidationOption, ValidatorOpti
 use crate::error::Error;
 
 mod builder;
+pub(crate) mod editions;
 mod evaluator;
 mod lookups;
-mod resolve;
 mod rules;
 
 use builder::Builder;
