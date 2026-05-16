@@ -34,20 +34,14 @@ doc-all:
 pre-commit: fmt-check lint test test-no-cel doc
 	@echo "All checks passed"
 
-# Publish in dependency order (types first, then build crate, then main crate)
+# Workspace publish (cargo >= 1.90). Cargo topologically sorts publishable
+# crates and treats internal workspace siblings as virtually published during
+# verification, so dry-run works correctly even on a bumped workspace.
 publish-dry:
-	cargo publish --dry-run -p prost-protovalidate-types
-	cargo publish --dry-run -p prost-protovalidate-build
-	cargo publish --dry-run -p prost-protovalidate
+	cargo publish --workspace --dry-run
 
 publish:
-	cargo publish -p prost-protovalidate-types
-	@echo "Waiting for crates.io index to update..."
-	@sleep 30
-	cargo publish -p prost-protovalidate-build
-	@echo "Waiting for crates.io index to update..."
-	@sleep 30
-	cargo publish -p prost-protovalidate
+	cargo publish --workspace
 
 # Pinned upstream version for the conformance tools and the buf.validate schema. Bump together unless a deliberate split is required.
 PROTOVALIDATE_TOOLS_VERSION ?= v1.1.1

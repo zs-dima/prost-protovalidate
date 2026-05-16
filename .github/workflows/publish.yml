@@ -10,49 +10,41 @@ env:
 
 jobs:
   publish:
-    name: Publish to crates.io
+    name: Publish workspace to crates.io
     runs-on: ubuntu-latest
     environment: crates-io
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
       - name: Verify version matches tag
         run: |
+          set -euo pipefail
           TAG=${GITHUB_REF#refs/tags/v}
           for crate in crates/prost-protovalidate-types crates/prost-protovalidate-build crates/prost-protovalidate; do
-            VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r ".packages[] | select(.manifest_path | endswith(\"$crate/Cargo.toml\")) | .version")
+            VERSION=$(cargo metadata --no-deps --format-version 1 \
+              | jq -r ".packages[] | select(.manifest_path | endswith(\"$crate/Cargo.toml\")) | .version")
             if [ "$VERSION" != "$TAG" ]; then
               echo "::error::Version mismatch in $crate: Cargo.toml=$VERSION, tag=$TAG"
               exit 1
             fi
           done
 
-      - name: Dry run
-        run: |
-          cargo publish --dry-run -p prost-protovalidate-types
-          cargo publish --dry-run -p prost-protovalidate-build
+      - name: Authenticate to crates.io (Trusted Publishing)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
 
-      # Publish in dependency order with index propagation delay
-      - name: Publish prost-protovalidate-types
-        run: cargo publish -p prost-protovalidate-types
+      - name: Publish workspace
+        run: cargo publish --workspace
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Wait for index
-        run: sleep 30
-
-      - name: Publish prost-protovalidate-build
-        run: cargo publish -p prost-protovalidate-build
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Wait for index
-        run: sleep 30
-
-      - name: Publish prost-protovalidate
-        run: cargo publish -p prost-protovalidate
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
