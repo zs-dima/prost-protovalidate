@@ -1,5 +1,6 @@
-.PHONY: fmt fmt-check lint test check doc pre-commit publish-dry publish clean \
-       conformance-build conformance-harness conformance conformance-verbose
+.PHONY: fmt fmt-check lint test test-no-cel bench check doc doc-all pre-commit publish-dry publish clean \
+       conformance-build conformance-harness conformance conformance-verbose \
+       sync-schema sync-schema-check
 
 fmt:
 	cargo fmt --all
@@ -9,34 +10,64 @@ fmt-check:
 
 lint:
 	cargo clippy --all-targets --all-features -- -D warnings
-	@command -v cargo-deny >/dev/null 2>&1 && cargo deny check || echo "cargo-deny not installed, skipping (cargo install cargo-deny)"
+	cargo clippy --all-targets -p prost-protovalidate --no-default-features -- -D warnings
+	cargo deny check
 
 test:
 	cargo test --all-features
+
+test-no-cel:
+	cargo test -p prost-protovalidate --no-default-features
+
+bench:
+	cargo bench --all-features -p prost-protovalidate
 
 check:
 	cargo check --all-targets --all-features
 
 doc:
+	RUSTDOCFLAGS=-Dwarnings cargo doc --no-deps --all-features
+
+doc-all:
 	cargo doc --no-deps --all-features --document-private-items
 
-pre-commit: fmt-check lint test doc
+pre-commit: fmt-check lint test test-no-cel doc
 	@echo "All checks passed"
 
-# Publish in dependency order (types first, then main crate)
+# Publish in dependency order (types first, then build crate, then main crate)
 publish-dry:
 	cargo publish --dry-run -p prost-protovalidate-types
+	cargo publish --dry-run -p prost-protovalidate-build
 	cargo publish --dry-run -p prost-protovalidate
 
 publish:
 	cargo publish -p prost-protovalidate-types
 	@echo "Waiting for crates.io index to update..."
 	@sleep 30
+	cargo publish -p prost-protovalidate-build
+	@echo "Waiting for crates.io index to update..."
+	@sleep 30
 	cargo publish -p prost-protovalidate
 
-# Pinned upstream versions for conformance tooling and schema sync docs.
+# Pinned upstream version for the conformance tools and the buf.validate schema. Bump together unless a deliberate split is required.
 PROTOVALIDATE_TOOLS_VERSION ?= v1.1.1
 PROTOVALIDATE_SCHEMA_REF ?= v1.1.1
+
+SCHEMA_DEST = crates/prost-protovalidate-types/proto/buf/validate/validate.proto
+SCHEMA_URL  = https://raw.githubusercontent.com/bufbuild/protovalidate/$(PROTOVALIDATE_SCHEMA_REF)/proto/protovalidate/buf/validate/validate.proto
+
+# Re-vendor validate.proto from the pinned upstream tag.
+# Override the ref ad-hoc: `make sync-schema PROTOVALIDATE_SCHEMA_REF=v1.2.0`.
+sync-schema:
+	curl -fsSL "$(SCHEMA_URL)" -o "$(SCHEMA_DEST)"
+
+# Used by CI: re-vendor into a temp file and fail if it differs from the
+# committed copy. Does not touch the working tree.
+sync-schema-check:
+	@tmp="$$(mktemp)"; \
+	curl -fsSL "$(SCHEMA_URL)" -o "$$tmp"; \
+	diff -u "$(SCHEMA_DEST)" "$$tmp" || { rm -f "$$tmp"; echo "drift: $(SCHEMA_DEST) is out of sync with $(PROTOVALIDATE_SCHEMA_REF)"; exit 1; }; \
+	rm -f "$$tmp"
 
 # Conformance tests use a pinned upstream protovalidate harness binary.
 CONFORMANCE_HARNESS = target/protovalidate-conformance$(shell go env GOEXE)

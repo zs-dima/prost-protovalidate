@@ -1,4 +1,6 @@
 pub(crate) mod any;
+#[cfg(feature = "cel")]
+#[cfg_attr(docsrs, doc(cfg(feature = "cel")))]
 pub(crate) mod cel;
 pub(crate) mod embedded;
 pub(crate) mod enum_check;

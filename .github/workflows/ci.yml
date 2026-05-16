@@ -32,6 +32,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo clippy --all-targets -p prost-protovalidate --no-default-features -- -D warnings
 
   test:
     name: Test (${{ matrix.rust }})
@@ -47,6 +48,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo test --all-features
+      - run: cargo test -p prost-protovalidate --no-default-features
+      - run: cargo test -p prost-protovalidate-tests --no-default-features
+      - run: cargo bench --no-run -p prost-protovalidate --all-features
 
   doc:
     name: Documentation
@@ -59,13 +63,18 @@ jobs:
       - run: cargo doc --no-deps --all-features
         env:
           RUSTDOCFLAGS: -Dwarnings
+      - run: cargo doc --no-deps -p prost-protovalidate --no-default-features
+        env:
+          RUSTDOCFLAGS: -Dwarnings
 
   deny:
     name: Deny (License & Advisory)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: taiki-e/install-action@cargo-deny
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - run: cargo deny check
 
   conformance:
@@ -97,3 +106,10 @@ jobs:
       - uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           package: prost-protovalidate
+      # TODO: re-enable once prost-protovalidate-build is published to crates.io
+      # (first release: v0.4.0). Until then there is no baseline version to
+      # compare against and the action errors:
+      #   prost-protovalidate-build not found in registry (crates.io)
+      # - uses: obi1kenobi/cargo-semver-checks-action@v2
+      #   with:
+      #     package: prost-protovalidate-build

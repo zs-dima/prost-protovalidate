@@ -1,42 +1,32 @@
 # prost-protovalidate-types schema sync
 
-`buf.validate` schema is synced from a pinned upstream `protovalidate` GitHub ref.
+`proto/buf/validate/validate.proto` is vendored from the upstream
+`bufbuild/protovalidate` GitHub repo at the ref `PROTOVALIDATE_SCHEMA_REF`
+in the root `Makefile` (currently `v1.1.1`).
 
-Pinned source URL template:
+## Sync
 
-`https://raw.githubusercontent.com/bufbuild/protovalidate/$PROTOVALIDATE_SCHEMA_REF/proto/protovalidate/buf/validate/validate.proto`
+From the repo root:
 
-The default `PROTOVALIDATE_SCHEMA_REF` is defined in the repository root
-`Makefile` and should stay aligned with `PROTOVALIDATE_TOOLS_VERSION`.
-
-Local destination:
-
-`crates/prost-protovalidate-types/proto/buf/validate/validate.proto`
-
-## Sync commands
-
-From repository root (Linux/macOS):
-
-```bash
-SCHEMA_REF="$(awk '/^PROTOVALIDATE_SCHEMA_REF[[:space:]]*\\?=/{print $3}' Makefile)"
-curl -fsSL \
-  "https://raw.githubusercontent.com/bufbuild/protovalidate/${SCHEMA_REF}/proto/protovalidate/buf/validate/validate.proto" \
-  -o crates/prost-protovalidate-types/proto/buf/validate/validate.proto
+```
+make sync-schema
 ```
 
-From repository root (PowerShell):
+To preview a different ref without changing the `Makefile`:
 
-```powershell
-$schemaRef =
-  (Select-String -Path Makefile -Pattern '^PROTOVALIDATE_SCHEMA_REF\s*\?=\s*(\S+)$')
-  .Matches[0].Groups[1].Value
-Invoke-WebRequest `
-  -Uri "https://raw.githubusercontent.com/bufbuild/protovalidate/$schemaRef/proto/protovalidate/buf/validate/validate.proto" `
-  -OutFile "crates/prost-protovalidate-types/proto/buf/validate/validate.proto"
 ```
+make sync-schema PROTOVALIDATE_SCHEMA_REF=v1.2.0
+```
+
+CI runs `make sync-schema-check` on every pull request and fails if the
+committed file does not match the pinned ref.
 
 ## Policy
 
 - Do not edit `proto/buf/validate/validate.proto` manually.
-- Keep `validate.proto` aligned to `PROTOVALIDATE_SCHEMA_REF`.
-- Bump `PROTOVALIDATE_SCHEMA_REF` and `PROTOVALIDATE_TOOLS_VERSION` together unless a deliberate split is required.
+- Bump `PROTOVALIDATE_SCHEMA_REF` and `PROTOVALIDATE_TOOLS_VERSION` in the
+  root `Makefile` together unless a deliberate split is required. The
+  conformance harness binary (`PROTOVALIDATE_TOOLS_VERSION`) carries the
+  test corpus, and the hardcoded violation messages in
+  `crates/prost-protovalidate/src/validator/rules/` and
+  `crates/prost-protovalidate-build/src/rules/` must match the corpus.

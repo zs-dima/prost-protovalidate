@@ -1,5 +1,0 @@
-version: v2
-modules:
-  - path: bufsync
-deps:
-  - buf.build/bufbuild/protovalidate

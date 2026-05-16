@@ -20,9 +20,9 @@ use crate::error::CompilationError;
 use super::evaluator::Evaluator;
 use super::evaluator::Evaluators;
 use super::evaluator::any::AnyEval;
+#[cfg(feature = "cel")]
 use super::evaluator::cel::{
     CelFieldEval, CelMessageEval, CelRuleProgram, CelViolationMode, compile_programs,
-    message_to_cel_value, value_to_cel_value,
 };
 use super::evaluator::embedded::EmbeddedMessageEval;
 use super::evaluator::enum_check::DefinedEnumEval;
@@ -200,7 +200,7 @@ impl Builder {
         };
 
         if let Some(ref rules) = msg_rules {
-            if let Err(err) = Self::process_message_expressions(rules, msg_eval) {
+            if let Err(err) = Self::process_message_expressions(desc.full_name(), rules, msg_eval) {
                 msg_eval.set_err(err);
                 return;
             }
@@ -214,7 +214,9 @@ impl Builder {
         self.process_fields(desc, msg_rules.as_ref(), msg_eval, cache);
     }
 
+    #[cfg(feature = "cel")]
     fn process_message_expressions(
+        _full_name: &str,
         msg_rules: &MessageRules,
         msg_eval: &Arc<MessageEval>,
     ) -> Result<(), CompilationError> {
@@ -227,6 +229,24 @@ impl Builder {
         )?;
         if !programs.is_empty() {
             msg_eval.append(Box::new(CelMessageEval { programs }));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "cel"))]
+    fn process_message_expressions(
+        full_name: &str,
+        msg_rules: &MessageRules,
+        _msg_eval: &Arc<MessageEval>,
+    ) -> Result<(), CompilationError> {
+        if !msg_rules.cel_expression.is_empty() || !msg_rules.cel.is_empty() {
+            return Err(CompilationError {
+                cause: format!(
+                    "message `{full_name}` has CEL expression rules but the `cel` feature \
+                     is not enabled; enable with \
+                     `prost-protovalidate = {{ features = [\"cel\"] }}`"
+                ),
+            });
         }
         Ok(())
     }
@@ -468,7 +488,7 @@ impl Builder {
         validate_rule_type_matches_field(fdesc, field_rules, nested)?;
         validate_repeated_unique_rule_type(fdesc, field_rules, nested)?;
         Self::process_ignore_empty(fdesc, ignore, val_eval, nested);
-        Self::process_field_expressions(field_rules, val_eval)?;
+        Self::process_field_expressions(fdesc.full_name(), field_rules, val_eval)?;
         self.process_embedded_message(fdesc, val_eval, cache, nested)?;
         self.process_wrapper_rules(
             fdesc,
@@ -513,7 +533,9 @@ impl Builder {
             .then(|| nested_zero_value(fdesc, nested));
     }
 
+    #[cfg(feature = "cel")]
     fn process_field_expressions(
+        _full_name: &str,
         field_rules: &FieldRules,
         val_eval: &mut ValueEval,
     ) -> Result<(), CompilationError> {
@@ -526,6 +548,24 @@ impl Builder {
         )?;
         if !programs.is_empty() {
             val_eval.push_rule(Box::new(CelFieldEval { programs }));
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "cel"))]
+    fn process_field_expressions(
+        full_name: &str,
+        field_rules: &FieldRules,
+        _val_eval: &mut ValueEval,
+    ) -> Result<(), CompilationError> {
+        if !field_rules.cel_expression.is_empty() || !field_rules.cel.is_empty() {
+            return Err(CompilationError {
+                cause: format!(
+                    "field `{full_name}` has CEL expression rules but the `cel` feature \
+                     is not enabled; enable with \
+                     `prost-protovalidate = {{ features = [\"cel\"] }}`"
+                ),
+            });
         }
         Ok(())
     }
@@ -640,6 +680,7 @@ impl Builder {
         Ok(())
     }
 
+    #[cfg(feature = "cel")]
     #[allow(clippy::similar_names)]
     fn process_predefined_rules(
         &self,
@@ -661,7 +702,6 @@ impl Builder {
         };
 
         let predefined_extension = self.predefined_extension_descriptor()?;
-        let rules_binding = message_to_cel_value(&rule_message)?;
         let mut programs = Vec::new();
 
         // Reparse the rule message using the builder's pool so extension fields
@@ -676,14 +716,12 @@ impl Builder {
                 continue;
             }
 
-            let rule_binding = value_to_cel_value(extension_value)?;
             let ext_element = extension_path_element(&extension_desc);
             let mut compiled = compile_predefined_rule_programs(
                 &predefined.cel,
                 rule_type.name(),
                 &format!("[{}]", extension_desc.full_name()),
-                &rule_binding,
-                &rules_binding,
+                &rule_message,
                 None,
                 Some(extension_value),
             )?;
@@ -695,6 +733,49 @@ impl Builder {
 
         if !programs.is_empty() {
             val_eval.push_rule(Box::new(CelFieldEval { programs }));
+        }
+
+        Ok(())
+    }
+
+    #[cfg(not(feature = "cel"))]
+    fn process_predefined_rules(
+        &self,
+        fdesc: &FieldDescriptor,
+        field_rules_dynamic: Option<&DynamicMessage>,
+        _val_eval: &mut ValueEval,
+        nested: bool,
+    ) -> Result<(), CompilationError> {
+        if lookups::is_message_field(fdesc) && !fdesc.is_map() && (!fdesc.is_list() || nested) {
+            if let Some(msg_desc) = fdesc.kind().as_message() {
+                if lookups::expected_wrapper_rule(msg_desc.full_name()).is_some() {
+                    return Ok(());
+                }
+            }
+        }
+
+        let Some((_rule_type, rule_message)) = active_rule_message(field_rules_dynamic) else {
+            return Ok(());
+        };
+
+        let predefined_extension = self.predefined_extension_descriptor()?;
+
+        let reparsed = self.reparse_with_descriptor_pool(&rule_message)?;
+
+        for (extension_desc, _extension_value) in reparsed.extensions() {
+            let predefined =
+                decode_predefined_from_extension(&extension_desc, &predefined_extension)?;
+            if !predefined.cel.is_empty() {
+                return Err(CompilationError {
+                    cause: format!(
+                        "field `{}` has predefined CEL rules on extension `{}` but the `cel` \
+                         feature is not enabled; enable with \
+                         `prost-protovalidate = {{ features = [\"cel\"] }}`",
+                        fdesc.full_name(),
+                        extension_desc.full_name(),
+                    ),
+                });
+            }
         }
 
         Ok(())
@@ -1411,6 +1492,7 @@ fn value_contains_unknown_fields(value: &Value) -> bool {
     }
 }
 
+#[cfg(feature = "cel")]
 fn extension_path_element(
     ext: &ExtensionDescriptor,
 ) -> prost_protovalidate_types::FieldPathElement {
@@ -1425,6 +1507,10 @@ fn extension_path_element(
     }
 }
 
+// Shared between `#[cfg(feature = "cel")]` and `#[cfg(not(feature = "cel"))]`
+// callers of `process_predefined_rules`; both need to inspect the extension's
+// `PredefinedRules`. Must stay ungated — only the CEL-side compilation helpers
+// (`compile_predefined_rule_programs`, `extension_path_element`) are gated.
 fn decode_predefined_from_extension(
     extension: &ExtensionDescriptor,
     predefined_extension: &ExtensionDescriptor,
@@ -1444,13 +1530,13 @@ fn decode_predefined_from_extension(
         })
 }
 
+#[cfg(feature = "cel")]
 #[allow(clippy::similar_names)]
 fn compile_predefined_rule_programs(
     rules: &[prost_protovalidate_types::Rule],
     rule_type_name: &str,
     rule_field_name: &str,
-    rule_binding: &cel::Value,
-    rules_binding: &cel::Value,
+    rules_message: &DynamicMessage,
     rule_descriptor: Option<&FieldDescriptor>,
     rule_value: Option<&Value>,
 ) -> Result<Vec<CelRuleProgram>, CompilationError> {
@@ -1466,17 +1552,22 @@ fn compile_predefined_rule_programs(
         let program = cel::Program::compile(&expr).map_err(|e| CompilationError {
             cause: format!("failed to compile CEL rule `{expr}`: {e}"),
         })?;
+        let this_presence_paths = super::evaluator::cel::collect_has_paths(&program, "this");
+        let rules_presence_paths = super::evaluator::cel::collect_has_paths(&program, "rules");
+        let rule_presence_paths = super::evaluator::cel::collect_has_paths(&program, "rule");
         programs.push(CelRuleProgram {
             rule_id: rule.id.clone().unwrap_or_else(|| expr.clone()),
             message: rule.message.clone(),
             rule_path: rule_type_name.to_string(),
             program,
-            rule_binding: Some(rule_binding.clone()),
-            rules_binding: Some(rules_binding.clone()),
+            rules_message: Some(rules_message.clone()),
             rule_descriptor: rule_descriptor.cloned(),
             rule_value: rule_value.cloned(),
             extension_element: None,
             violation_mode: CelViolationMode::Field,
+            this_presence_paths,
+            rules_presence_paths,
+            rule_presence_paths,
         });
     }
     Ok(programs)

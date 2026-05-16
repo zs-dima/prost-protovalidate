@@ -5,12 +5,13 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.86-blue.svg)](https://blog.rust-lang.org/2025/04/03/Rust-1.86.0.html)
 
-Runtime validation for Protocol Buffer messages using [buf.validate](https://github.com/bufbuild/protovalidate) rules, specifically built for `prost` and `prost-reflect`.
+Runtime validation for Protocol Buffer messages using [buf.validate](https://github.com/bufbuild/protovalidate) rules, specifically built for `prost` and `prost-reflect` — with an optional **zero-cost generated path via [`prost-protovalidate-build`](crates/prost-protovalidate-build/)** for schemas that don't need CEL at runtime.
 
-`prost-protovalidate` interprets `buf.validate` constraints (including Common Expression Language / CEL conditions) attached to protobuf messages at runtime, enabling robust input validation directly from your single source of truth—your `.proto` files.
+`prost-protovalidate` interprets `buf.validate` constraints (including Common Expression Language / CEL conditions) attached to protobuf messages at runtime, enabling robust input validation directly from your single source of truth—your `.proto` files. For CEL-free schemas, `prost-protovalidate-build` emits `impl Validate` at build time so validation runs through direct field access — no reflection, no CEL interpreter on the hot path.
 
 ## Key Features
 
+- **Zero-cost generated validators (no CEL on the hot path)** — [`prost-protovalidate-build`](crates/prost-protovalidate-build/) emits `impl Validate` for messages with standard-only rules; no `prost-reflect` transcoding, no CEL interpreter, monomorphized direct field access. Combined with `default-features = false` on `prost-protovalidate`, the entire `cel` / `chrono` / `paste` / `thiserror` 1.x subtree drops out of your build. Messages with CEL fall back to the runtime `Validator` automatically (with a `cargo:warning=` diagnostic, never silently skipped).
 - **Proto as single source of truth** — Define validation rules inside `.proto` files using `buf.validate` and enforce them automatically in Rust.
 - **Runtime validation** — Leverages `prost-reflect` to dynamically inspect message fields and evaluate complex validation rules at runtime.
 - **CEL Evaluation** — Fully supports compiling and evaluating Common Expression Language (CEL) conditions for cross-field or complex constraints.
@@ -19,10 +20,11 @@ Runtime validation for Protocol Buffer messages using [buf.validate](https://git
 
 ## Crates
 
-| Crate                                                          | Purpose                                                         | Cargo section    |
-| -------------------------------------------------------------- | --------------------------------------------------------------- | ---------------- |
-| [prost-protovalidate-types](crates/prost-protovalidate-types/) | `buf.validate` proto types with prost and prost-reflect support | `[dependencies]` |
-| [prost-protovalidate](crates/prost-protovalidate/)             | Runtime validation engine (CEL parsing, constraint evaluation)  | `[dependencies]` |
+| Crate                                                          | Purpose                                                         | Cargo section          |
+| -------------------------------------------------------------- | --------------------------------------------------------------- | ---------------------- |
+| [prost-protovalidate-types](crates/prost-protovalidate-types/) | `buf.validate` proto types with prost and prost-reflect support | `[dependencies]`       |
+| [prost-protovalidate](crates/prost-protovalidate/)             | Runtime validation engine (CEL parsing, constraint evaluation)  | `[dependencies]`       |
+| [prost-protovalidate-build](crates/prost-protovalidate-build/) | Build-time code generator for zero-cost validation              | `[build-dependencies]` |
 
 ## Quick Start
 
@@ -31,8 +33,26 @@ Add the dependencies to your `Cargo.toml`:
 ```toml
 [dependencies]
 prost = "0.14"
-prost-protovalidate = "0.3"
+prost-protovalidate = "0.4"
 ```
+
+### Feature Flags
+
+| Feature | Default | Description                                         |
+| ------- | ------- | --------------------------------------------------- |
+| `cel`   | Yes     | CEL expression evaluation and `chrono` time support |
+
+To disable CEL for a lighter dependency footprint (removes `cel`, `chrono`,
+`paste`, and `thiserror` 1.x transitive deps):
+
+```toml
+[dependencies]
+prost-protovalidate = { version = "0.4", default-features = false }
+```
+
+Without `cel`, standard rules (range checks, string constraints, format
+validators, etc.) work normally. Messages with CEL expressions or predefined
+CEL rules will produce a `CompilationError` at validation time.
 
 ### Usage
 
@@ -79,7 +99,107 @@ validator.validate(&request)?;
 
 | prost-protovalidate | prost | prost-reflect | MSRV |
 | ------------------- | ----- | ------------- | ---- |
-| 0.3.x               | 0.14  | 0.16          | 1.86 |
+| 0.4.x               | 0.14  | 0.16          | 1.86 |
+
+## Validation Modes
+
+Three validation modes cover different use cases:
+
+### Generated validation (zero-cost, no CEL on the hot path)
+
+For messages with **only** standard rules (no CEL). Validation runs through
+monomorphized direct field access — **no `prost-reflect` transcoding, no CEL
+interpreter, no dynamic dispatch** on the hot path. Combined with
+`default-features = false` on `prost-protovalidate`, the entire `cel` /
+`chrono` / `paste` / `thiserror` 1.x subtree drops out of your build.
+Requires `prost-protovalidate-build` in `[build-dependencies]`.
+
+```rust
+use prost_protovalidate::Validate;
+
+msg.validate()?;
+```
+
+### Runtime validation with CEL (full conformance)
+
+For messages with CEL expressions or mixed rules. Uses `prost-reflect`
+dynamic dispatch and the CEL interpreter at runtime.
+
+```rust
+use prost_protovalidate::Validator;
+
+let validator = Validator::new();
+validator.validate(&msg)?;
+```
+
+### Runtime without CEL (lightweight)
+
+For services that don't use CEL. Disabling the `cel` feature removes `cel`,
+`chrono`, `paste`, and transitive `thiserror` 1.x deps. Pairs naturally with
+generated validators above for a CEL-free dependency tree end to end.
+
+```toml
+[dependencies]
+prost-protovalidate = { version = "0.4", default-features = false }
+```
+
+Standard rules work normally; messages with CEL rules produce a
+`CompilationError`.
+
+### Which mode for which message
+
+| Proto rules                               | `Validate` trait generated? | How to validate                      |
+| ----------------------------------------- | --------------------------- | ------------------------------------ |
+| Standard only (min_len, gte, email, etc.) | Yes                         | `msg.validate()` (generated, fast)   |
+| CEL only (expressions)                    | No                          | `validator.validate(&msg)` (runtime) |
+| Mixed (standard + CEL)                    | No                          | `validator.validate(&msg)` (runtime) |
+| Nested runtime-only dependencies          | No                          | `validator.validate(&msg)` (runtime) |
+| No rules                                  | No                          | —                                    |
+
+## Build-Time Code Generation
+
+Add `prost-protovalidate-build` to your build dependencies:
+
+```toml
+[dependencies]
+prost = "0.14"
+prost-protovalidate = "0.4"
+
+[build-dependencies]
+prost-build = "0.14"
+prost-protovalidate-build = "0.4"
+```
+
+In your `build.rs`:
+
+```rust,no_run
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let descriptor_path = std::path::PathBuf::from(std::env::var("OUT_DIR")?)
+        .join("file_descriptor_set.bin");
+
+    prost_build::Config::new()
+        .file_descriptor_set_path(&descriptor_path)
+        .compile_protos(&["proto/service.proto"], &["proto/"])?;
+
+    prost_protovalidate_build::Builder::new()
+        .file_descriptor_set_path(&descriptor_path)?
+        .compile()?;
+
+    Ok(())
+}
+```
+
+Include the generated validators alongside your prost-generated code:
+
+```rust,ignore
+include!(concat!(env!("OUT_DIR"), "/validate_impl.rs"));
+```
+
+Messages with CEL or predefined CEL rules are skipped during code
+generation (with a `cargo:warning` explaining why). Messages that
+transitively depend on runtime-only nested validation are also skipped to
+avoid partial generated validation. Use the runtime `Validator` for those
+messages.
 
 ## Conformance
 

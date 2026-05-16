@@ -4,7 +4,7 @@ resolver = "3"
 exclude = [".github", "bacon.toml", "deny.toml"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 authors = ["prost-protovalidate contributors"]
 edition = "2024"
 rust-version = "1.86"
@@ -30,19 +30,30 @@ prost-build = "0.14"
 prost-reflect = { version = "0.16", features = ["derive", "serde"] }
 prost-reflect-build = "0.16"
 
-prost-protovalidate-types = { package = "prost-protovalidate-types", path = "crates/prost-protovalidate-types", version = "=0.3.0" }
-prost-protovalidate = { package = "prost-protovalidate", path = "crates/prost-protovalidate", version = "=0.3.0" }
+prost-protovalidate-types = { package = "prost-protovalidate-types", path = "crates/prost-protovalidate-types", version = "=0.4.0" }
+prost-protovalidate = { package = "prost-protovalidate", path = "crates/prost-protovalidate", version = "=0.4.0" }
+prost-protovalidate-build = { package = "prost-protovalidate-build", path = "crates/prost-protovalidate-build", version = "=0.4.0" }
 
 # Error handling
 thiserror = "2.0"
+
+# Code generation
+quote = "1"
+proc-macro2 = "1"
+prettyplease = "0.2"
+syn = "2"
 
 # Utilities
 regex = "1"
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-cel = { version = "0.12", features = ["json", "chrono"] }
+cel = { version = "0.13", features = ["json", "chrono"] }
 fluent-uri = "0.4"
 
 # Testing
 pretty_assertions = "1"
 proptest = "1"
+criterion = { version = "0.8.2", default-features = false }
+
+[profile.bench]
+debug = true
