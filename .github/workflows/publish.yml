@@ -14,7 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: crates-io
     permissions:
-      id-token: write
       contents: read
     concurrency:
       group: publish-${{ github.ref }}
@@ -40,11 +39,7 @@ jobs:
             fi
           done
 
-      - name: Authenticate to crates.io (Trusted Publishing)
-        id: auth
-        uses: rust-lang/crates-io-auth-action@v1
-
       - name: Publish workspace
         run: cargo publish --workspace
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
