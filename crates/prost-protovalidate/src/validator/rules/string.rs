@@ -19,7 +19,7 @@ static ULID_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Strict HTTP header name: token chars per RFC 7230's `token` rule.
 /// Allowed characters: `!#$%&'*+-.0-9A-Za-z^_``|~`, with optional `:` prefix for pseudo-headers.
-fn is_valid_http_header_name_strict(s: &str) -> bool {
+pub(crate) fn is_valid_http_header_name_strict(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }
@@ -55,7 +55,7 @@ fn is_token_char(b: u8) -> bool {
 }
 
 /// Loose HTTP header name: any non-empty string without NUL, CR, or LF.
-fn is_valid_http_header_name_loose(s: &str) -> bool {
+pub(crate) fn is_valid_http_header_name_loose(s: &str) -> bool {
     if s.is_empty() {
         return false;
     }
@@ -64,13 +64,13 @@ fn is_valid_http_header_name_loose(s: &str) -> bool {
 
 /// Strict HTTP header value: no NUL, control chars (0x00-0x08, 0x0A-0x1F), or DEL (0x7F).
 /// HT (0x09) IS allowed per RFC 7230.
-fn is_valid_http_header_value_strict(s: &str) -> bool {
+pub(crate) fn is_valid_http_header_value_strict(s: &str) -> bool {
     !s.bytes()
         .any(|b| matches!(b, 0x00..=0x08 | 0x0A..=0x1F | 0x7F))
 }
 
 /// Loose HTTP header value: no NUL, CR, or LF.
-fn is_valid_http_header_value_loose(s: &str) -> bool {
+pub(crate) fn is_valid_http_header_value_loose(s: &str) -> bool {
     !s.bytes().any(|b| b == 0x00 || b == 0x0A || b == 0x0D)
 }
 
@@ -302,17 +302,23 @@ impl StringRuleEval {
         }
 
         if !self.r#in.is_empty() && !self.r#in.contains(s) {
+            // Sort before formatting so the message is deterministic across
+            // runs (HashSet iteration order is randomised per RandomState).
+            let mut sorted: Vec<&String> = self.r#in.iter().collect();
+            sorted.sort();
             violations.push(Violation::new(
                 "",
                 "string.in",
-                format!("must be in list {:?}", self.r#in),
+                format!("must be in list {sorted:?}"),
             ));
         }
         if self.not_in.contains(s) {
+            let mut sorted: Vec<&String> = self.not_in.iter().collect();
+            sorted.sort();
             violations.push(Violation::new(
                 "",
                 "string.not_in",
-                format!("must not be in list {:?}", self.not_in),
+                format!("must not be in list {sorted:?}"),
             ));
         }
 
@@ -780,6 +786,7 @@ fn is_ipv6_any(s: &str) -> bool {
 }
 
 /// Strict IPv6 without zone IDs.
+#[cfg(feature = "cel")]
 fn is_ipv6_strict(s: &str) -> bool {
     if s != s.trim() || s.contains('%') {
         return false;
@@ -980,7 +987,7 @@ fn is_valid_uri_chars(s: &str) -> bool {
     true
 }
 
-fn is_uuid(s: &str) -> bool {
+pub(crate) fn is_uuid(s: &str) -> bool {
     // UUID format: 8-4-4-4-12 hex digits
     if s.len() != 36 {
         return false;
@@ -998,11 +1005,11 @@ fn is_uuid(s: &str) -> bool {
     true
 }
 
-fn is_tuuid(s: &str) -> bool {
+pub(crate) fn is_tuuid(s: &str) -> bool {
     s.len() == 32 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-fn is_ulid(s: &str) -> bool {
+pub(crate) fn is_ulid(s: &str) -> bool {
     ULID_REGEX.is_match(s)
 }
 
@@ -1013,6 +1020,7 @@ enum IpVersion {
     V6,
 }
 
+#[cfg(feature = "cel")]
 pub(crate) fn is_ip_with_version(s: &str, version: i64) -> bool {
     match version {
         0 => is_ip(s),
@@ -1022,6 +1030,7 @@ pub(crate) fn is_ip_with_version(s: &str, version: i64) -> bool {
     }
 }
 
+#[cfg(feature = "cel")]
 pub(crate) fn is_ip_prefix_with_options(s: &str, version: i64, strict: bool) -> bool {
     let version = match version {
         0 => IpVersion::Any,
@@ -1042,7 +1051,7 @@ fn is_ip_prefix(s: &str, version: IpVersion, strict: bool) -> bool {
     }
 }
 
-fn is_ipv4_prefix(s: &str, strict: bool) -> bool {
+pub(crate) fn is_ipv4_prefix(s: &str, strict: bool) -> bool {
     if s != s.trim() {
         return false;
     }
@@ -1058,7 +1067,7 @@ fn is_ipv4_prefix(s: &str, strict: bool) -> bool {
     !strict || ipv4_is_prefix_only(ip, prefix_len)
 }
 
-fn is_ipv6_prefix(s: &str, strict: bool) -> bool {
+pub(crate) fn is_ipv6_prefix(s: &str, strict: bool) -> bool {
     if s != s.trim() {
         return false;
     }

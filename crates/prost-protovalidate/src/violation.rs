@@ -34,7 +34,12 @@ pub struct Violation {
 }
 
 impl Violation {
-    pub(crate) fn new(
+    /// Create a violation with the given field path, rule identifier, and message.
+    ///
+    /// The `rule_path` is set equal to `rule_id`. Enrichment fields
+    /// (`field_descriptor`, `field_value`, `rule_descriptor`, `rule_value`) are
+    /// left as `None` — they are populated only by the runtime validator.
+    pub fn new(
         field_path: impl Into<String>,
         rule_id: impl Into<String>,
         message: impl Into<String>,
@@ -58,8 +63,11 @@ impl Violation {
     /// Create a violation for a standard constraint where `rule_path` (the proto
     /// field path, e.g. `"string.email"`) may differ from `rule_id` (the
     /// constraint identifier, e.g. `"string.email_empty"`).
+    ///
     /// The `message` field is intentionally left empty per the conformance spec.
-    pub(crate) fn new_constraint(
+    /// Enrichment fields (`field_descriptor`, `field_value`, `rule_descriptor`,
+    /// `rule_value`) are left as `None`.
+    pub fn new_constraint(
         field_path: impl Into<String>,
         rule_id: impl Into<String>,
         rule_path: impl Into<String>,
@@ -222,6 +230,7 @@ impl Violation {
     }
 
     /// Append an extension element to the rule path.
+    #[cfg(feature = "cel")]
     pub(crate) fn with_rule_extension_element(mut self, element: FieldPathElement) -> Self {
         // Store the extension element so rule path hydration can re-apply metadata.
         self.extension_element = Some(element.clone());
@@ -238,22 +247,105 @@ impl Violation {
     }
 
     /// Strip the rule path so `proto.rule` is `None`.
-    /// Used for violations where only `rule_id` should be emitted (e.g. oneof, message-level CEL).
-    pub(crate) fn without_rule_path(mut self) -> Self {
+    ///
+    /// Used for violations where only `rule_id` should be emitted
+    /// (e.g. oneof, message-level CEL).
+    #[must_use]
+    pub fn without_rule_path(mut self) -> Self {
         self.proto.rule = None;
         self
     }
 
-    pub(crate) fn mark_for_key(&mut self) {
+    /// Mark this violation as caused by a map key (rather than a value).
+    ///
+    /// Set by the runtime map evaluator on every key-rule violation and by
+    /// generated validators when iterating map-key constraints — preserves
+    /// the `for_key` field on the wire-level [`Violation`] proto.
+    pub fn mark_for_key(&mut self) {
         self.proto.for_key = Some(true);
     }
 
+    /// Returns whether this violation was caused by a map key (rather than a value).
+    ///
+    /// `None` when the field is unset on the wire (the common case for
+    /// non-map-key violations); `Some(true)` after [`Violation::mark_for_key`].
+    #[must_use]
+    pub fn for_key(&self) -> Option<bool> {
+        self.proto.for_key
+    }
+
     /// Prepend a parent field path element.
-    pub(crate) fn prepend_path(&mut self, parent: &str) {
+    pub fn prepend_field_path(&mut self, parent: &str) {
         if parent.is_empty() {
             return;
         }
         prepend_proto_field_path(&mut self.proto.field, parent, None);
+    }
+
+    /// Prepend a parent field path with a `repeated` index subscript:
+    /// `parent[index].<existing>`.
+    pub fn prepend_index(&mut self, parent: &str, index: u64) {
+        if parent.is_empty() {
+            return;
+        }
+        prepend_with_subscript(
+            &mut self.proto.field,
+            parent,
+            field_path_element::Subscript::Index(index),
+        );
+    }
+
+    /// Prepend a parent field path with a string-keyed map subscript:
+    /// `parent["key"].<existing>`. The key is JSON-escaped on rendering,
+    /// matching the canonical runtime format for map paths.
+    pub fn prepend_string_key(&mut self, parent: &str, key: &str) {
+        if parent.is_empty() {
+            return;
+        }
+        prepend_with_subscript(
+            &mut self.proto.field,
+            parent,
+            field_path_element::Subscript::StringKey(key.to_string()),
+        );
+    }
+
+    /// Prepend a parent field path with a signed-integer-keyed map subscript:
+    /// `parent[key].<existing>`.
+    pub fn prepend_int_key(&mut self, parent: &str, key: i64) {
+        if parent.is_empty() {
+            return;
+        }
+        prepend_with_subscript(
+            &mut self.proto.field,
+            parent,
+            field_path_element::Subscript::IntKey(key),
+        );
+    }
+
+    /// Prepend a parent field path with an unsigned-integer-keyed map subscript:
+    /// `parent[key].<existing>`.
+    pub fn prepend_uint_key(&mut self, parent: &str, key: u64) {
+        if parent.is_empty() {
+            return;
+        }
+        prepend_with_subscript(
+            &mut self.proto.field,
+            parent,
+            field_path_element::Subscript::UintKey(key),
+        );
+    }
+
+    /// Prepend a parent field path with a bool-keyed map subscript:
+    /// `parent[true].<existing>` or `parent[false].<existing>`.
+    pub fn prepend_bool_key(&mut self, parent: &str, key: bool) {
+        if parent.is_empty() {
+            return;
+        }
+        prepend_with_subscript(
+            &mut self.proto.field,
+            parent,
+            field_path_element::Subscript::BoolKey(key),
+        );
     }
 
     pub(crate) fn prepend_path_with_descriptor(
@@ -268,7 +360,12 @@ impl Violation {
     }
 
     /// Prepend a parent rule path element.
-    pub(crate) fn prepend_rule_path(&mut self, parent: &str) {
+    ///
+    /// Used by generated validators to splice container-rule path
+    /// segments (e.g. `repeated.items`, `map.keys`, `map.values`) onto
+    /// item-level violations so the final `rule_path` matches the
+    /// runtime emission.
+    pub fn prepend_rule_path(&mut self, parent: &str) {
         if parent.is_empty() {
             return;
         }
@@ -279,6 +376,45 @@ impl Violation {
             self.set_rule_path(format!("{parent}.{current}"));
         }
     }
+}
+
+/// Prepend a single field-path element with a subscript before any existing path.
+///
+/// When the existing path begins with a subscript-only element (a bare
+/// `[…]` produced by an inner nested validator), the inner subscript is
+/// merged into the new prefix to avoid leaving an orphan element — same
+/// rule applied by [`prepend_proto_field_path`] for descriptor-based
+/// prepends.
+fn prepend_with_subscript(
+    path: &mut Option<FieldPath>,
+    parent: &str,
+    subscript: field_path_element::Subscript,
+) {
+    let mut prefix_element = FieldPathElement {
+        field_name: Some(parent.to_string()),
+        subscript: Some(subscript),
+        ..FieldPathElement::default()
+    };
+
+    let suffix_elements = match path.take() {
+        Some(existing) => existing.elements,
+        None => Vec::new(),
+    };
+
+    let mut iter = suffix_elements.into_iter();
+    let mut merged = Vec::with_capacity(iter.size_hint().0 + 1);
+
+    if let Some(first) = iter.next() {
+        if is_subscript_only_element(&first) && prefix_element.subscript.is_none() {
+            prefix_element.subscript.clone_from(&first.subscript);
+        } else {
+            merged.push(first);
+        }
+    }
+    merged.insert(0, prefix_element);
+    merged.extend(iter);
+
+    *path = Some(FieldPath { elements: merged });
 }
 
 fn apply_field_descriptor_to_path(path: &mut Option<FieldPath>, desc: &FieldDescriptor) {
@@ -637,7 +773,12 @@ fn field_path_string(path: Option<&FieldPath>) -> String {
     for element in &path.elements {
         if let Some(name) = &element.field_name {
             if !name.is_empty() {
-                if !out.is_empty() && !out.ends_with(']') {
+                // Insert a dot between any two adjacent path components.
+                // The previous component may already end in `]` (a map or
+                // repeated subscript) — the canonical protovalidate format
+                // still places a separator before the next field name:
+                // `items["alpha"].value`, not `items["alpha"]value`.
+                if !out.is_empty() {
                     out.push('.');
                 }
                 out.push_str(name);
@@ -737,7 +878,7 @@ mod tests {
         let raw = "line\n\t\"quote\"\\slash";
         let encoded = serde_json::to_string(raw).expect("json encoding should succeed");
         let mut violation = Violation::new(format!("[{encoded}]"), "string.min_len", "bad");
-        violation.prepend_path("rules");
+        violation.prepend_field_path("rules");
 
         let rendered = field_path_string(violation.proto.field.as_ref());
         assert_eq!(rendered, format!("rules[{encoded}]"));
@@ -755,6 +896,33 @@ mod tests {
         assert_eq!(
             field_path_string(violation.proto.field.as_ref()),
             format!("pattern[{encoded}]")
+        );
+    }
+
+    #[test]
+    fn field_path_string_inserts_dot_after_map_subscript() {
+        // Canonical protovalidate format places a `.` between a map
+        // subscript and the next field name: `items["alpha"].value`,
+        // not `items["alpha"]value`. Regression guard for the
+        // `field_path_string` renderer.
+        let mut violation = Violation::new("value", "string.min_len", "must be >= 1");
+        violation.prepend_string_key("items", "alpha");
+
+        assert_eq!(
+            field_path_string(violation.proto.field.as_ref()),
+            "items[\"alpha\"].value",
+        );
+    }
+
+    #[test]
+    fn field_path_string_inserts_dot_after_repeated_subscript() {
+        // Same rule for repeated subscripts: `xs[0].name`, not `xs[0]name`.
+        let mut violation = Violation::new("name", "string.min_len", "must be >= 1");
+        violation.prepend_index("xs", 0);
+
+        assert_eq!(
+            field_path_string(violation.proto.field.as_ref()),
+            "xs[0].name",
         );
     }
 

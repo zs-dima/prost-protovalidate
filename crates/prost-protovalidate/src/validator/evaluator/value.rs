@@ -129,7 +129,7 @@ fn prepend_field_path(
         Err(Error::Validation(mut ve)) => {
             for v in ve.violations_mut() {
                 if field_path.starts_with('[') {
-                    v.prepend_path(field_path);
+                    v.prepend_field_path(field_path);
                 } else {
                     v.prepend_path_with_descriptor(field_path, descriptor);
                 }

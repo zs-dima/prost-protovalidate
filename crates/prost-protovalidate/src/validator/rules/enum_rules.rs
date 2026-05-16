@@ -41,18 +41,24 @@ impl EnumRuleEval {
         }
 
         if !self.r#in.is_empty() && !self.r#in.contains(&v) {
+            // Sort so the rendered list is deterministic — HashSet iteration
+            // order is randomised per `RandomState`.
+            let mut sorted: Vec<i32> = self.r#in.iter().copied().collect();
+            sorted.sort_unstable();
             violations.push(Violation::new(
                 "",
                 "enum.in",
-                format!("must be in list {:?}", self.r#in),
+                format!("must be in list {sorted:?}"),
             ));
         }
 
         if self.not_in.contains(&v) {
+            let mut sorted: Vec<i32> = self.not_in.iter().copied().collect();
+            sorted.sort_unstable();
             violations.push(Violation::new(
                 "",
                 "enum.not_in",
-                format!("must not be in list {:?}", self.not_in),
+                format!("must not be in list {sorted:?}"),
             ));
         }
 

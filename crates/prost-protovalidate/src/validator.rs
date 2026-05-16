@@ -9,7 +9,7 @@ mod builder;
 pub(crate) mod editions;
 mod evaluator;
 mod lookups;
-mod rules;
+pub(crate) mod rules;
 
 use builder::Builder;
 use evaluator::MessageEvaluator;

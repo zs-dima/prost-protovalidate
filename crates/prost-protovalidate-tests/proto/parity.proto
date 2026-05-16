@@ -1,0 +1,349 @@
+syntax = "proto3";
+
+package parity;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+
+import "buf/validate/validate.proto";
+
+enum Status {
+  STATUS_UNSPECIFIED = 0;
+  STATUS_ACTIVE      = 1;
+  STATUS_INACTIVE    = 2;
+}
+
+// Nested message with its own validation rules.
+message Inner {
+  string value = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+// Main parity test message covering key standard rule types.
+message ParityTest {
+  // String: combined min_len + max_len
+  string name = 1 [(buf.validate.field).string = { min_len: 2, max_len: 50 }];
+  // String: email well-known
+  string email = 2 [(buf.validate.field).string.email = true];
+  // String: regex pattern
+  string code = 3 [(buf.validate.field).string.pattern = "^[A-Z]{3}$"];
+  // Int32: range gte + lte
+  int32 age = 4 [(buf.validate.field).int32 = { gte: 0, lte: 150 }];
+  // Uint64: gt
+  uint64 score = 5 [(buf.validate.field).uint64.gt = 0];
+  // Bool: const
+  bool accepted = 6 [(buf.validate.field).bool.const = true];
+  // Enum: defined_only
+  Status status = 7 [(buf.validate.field).enum.defined_only = true];
+  // Repeated: min_items + max_items
+  repeated string tags = 8 [(buf.validate.field).repeated = { min_items: 1, max_items: 5 }];
+  // Required nested message
+  Inner inner = 9 [(buf.validate.field).required = true];
+  // Ignore always: rules present but skipped
+  string ignored = 10 [(buf.validate.field) = { ignore: IGNORE_ALWAYS, string: { min_len: 100 } }];
+}
+
+// Test const and in/not_in rules.
+message ConstInTest {
+  string exact = 1 [(buf.validate.field).string.const = "fixed"];
+  int32  pick  = 2 [(buf.validate.field).int32 = { in: [1, 2, 3] }];
+  int32  avoid = 3 [(buf.validate.field).int32 = { not_in: [0, -1] }];
+}
+
+// Test FieldMask rules.
+message FieldMaskTest {
+  // const: paths must equal ["a", "b"]
+  google.protobuf.FieldMask exact_mask = 1 [(buf.validate.field).field_mask.const = {
+    paths: ["a", "b"]
+  }];
+  // in: paths must be subsets of allowed entries
+  google.protobuf.FieldMask allowed_mask = 2 [(buf.validate.field).field_mask = {
+    in: ["x", "y", "z.a"]
+  }];
+  // not_in: paths must not match any blocked entry
+  google.protobuf.FieldMask blocked_mask = 3 [(buf.validate.field).field_mask = {
+    not_in: ["secret", "internal"]
+  }];
+}
+
+// Proto3 `optional` scalars with various ignore modes — exercises the
+// presence-aware ignore guard fix (the build-time codegen must produce
+// code that type-checks on `Option<T>` and matches runtime semantics).
+message OptionalScalars {
+  optional string name = 1 [(buf.validate.field) = { ignore: IGNORE_IF_ZERO_VALUE, string: { min_len: 3 } }];
+  optional int32 score = 2 [(buf.validate.field) = { ignore: IGNORE_IF_ZERO_VALUE, int32: { gte: 1 } }];
+  optional bytes data = 3 [(buf.validate.field) = { ignore: IGNORE_IF_ZERO_VALUE, bytes: { min_len: 2 } }];
+}
+
+// Proto field names that are Rust keywords. The build-time codegen must
+// wrap each into a raw identifier (e.g. `r#type`) to stay compilable.
+message KeywordFields {
+  string type = 1 [(buf.validate.field).string.min_len = 1];
+  string mod = 2 [(buf.validate.field).string.min_len = 1];
+  string match = 3 [(buf.validate.field).string.min_len = 1];
+}
+
+// `bytes.contains: ""` is trivially satisfied; codegen must not emit a
+// `windows(0)` slice expression (which would panic at runtime).
+message BytesContainsEmpty {
+  bytes payload = 1 [(buf.validate.field).bytes = { contains: "" }];
+}
+
+// `enum.defined_only` must flow into nested scalar checks inside
+// `repeated` and `map` items. Without descriptor threading this rule
+// is silently dropped, allowing invalid enum numbers through.
+message EnumDefinedOnlyContainers {
+  repeated Status statuses = 1 [(buf.validate.field).repeated.items.enum.defined_only = true];
+  map<string, Status> by_key = 2 [(buf.validate.field).map.values.enum.defined_only = true];
+}
+
+// Map with message values. Verifies the typed `prepend_string_key`
+// path produces identical violation paths between codegen and runtime
+// — including JSON-escaped string subscripts.
+message MapStringInner {
+  map<string, Inner> items = 1;
+}
+
+// Map-key constraints. Exercises the runtime/codegen `for_key = true`
+// marker and the typed `prepend_*_key` dispatch for both string and
+// signed-integer keys.
+message MapKeyRules {
+  map<string, string> by_name = 1 [(buf.validate.field).map.keys.string.min_len = 1];
+  map<int32, string>  by_id   = 2 [(buf.validate.field).map.keys.int32.gt = 0];
+}
+
+// All 10 numeric types that the original parity message did not cover
+// (`int32` + `uint64` are already exercised in `ParityTest`). Each field
+// uses a different rule shape so we surface as many `lt/gt/in/not_in`
+// dispatches as practical.
+message AllNumericTypes {
+  int64    a_int64    =  1 [(buf.validate.field).int64    = { gte: 0, lte: 100 }];
+  uint32   a_uint32   =  2 [(buf.validate.field).uint32   = { gt: 0 }];
+  sint32   a_sint32   =  3 [(buf.validate.field).sint32   = { gte: -10, lte: 10 }];
+  sint64   a_sint64   =  4 [(buf.validate.field).sint64   = { in: [-1, 0, 1] }];
+  fixed32  a_fixed32  =  5 [(buf.validate.field).fixed32  = { const: 7 }];
+  fixed64  a_fixed64  =  6 [(buf.validate.field).fixed64  = { not_in: [0, 1] }];
+  sfixed32 a_sfixed32 =  7 [(buf.validate.field).sfixed32 = { lt: 50 }];
+  sfixed64 a_sfixed64 =  8 [(buf.validate.field).sfixed64 = { gte: -5 }];
+  float    a_float    =  9 [(buf.validate.field).float    = { gte: 0.0, lte: 1.0 }];
+  double   a_double   = 10 [(buf.validate.field).double   = { gt: 0.0 }];
+}
+
+// String-rule matrix the original parity message did not cover.
+message StringRuleMatrix {
+  string exact_len    = 1 [(buf.validate.field).string.len = 4];
+  string with_prefix  = 2 [(buf.validate.field).string.prefix = "pre-"];
+  string with_suffix  = 3 [(buf.validate.field).string.suffix = "-end"];
+  string with_sub     = 4 [(buf.validate.field).string.contains = "needle"];
+  string without_sub  = 5 [(buf.validate.field).string.not_contains = "secret"];
+  string from_list    = 6 [(buf.validate.field).string = { in: ["a", "b", "c"] }];
+  string not_in_list  = 7 [(buf.validate.field).string = { not_in: ["bad"] }];
+  string min_bytes    = 8 [(buf.validate.field).string.min_bytes = 3];
+  string max_bytes    = 9 [(buf.validate.field).string.max_bytes = 5];
+}
+
+// Well-known string formats. Each format has a distinct empty / invalid
+// rule_id pair so codegen and runtime must agree on every output.
+message StringWellKnown {
+  string hostname = 1 [(buf.validate.field).string.hostname = true];
+  string ipv4     = 2 [(buf.validate.field).string.ipv4 = true];
+  string ipv6     = 3 [(buf.validate.field).string.ipv6 = true];
+  string uri      = 4 [(buf.validate.field).string.uri = true];
+  string uuid     = 5 [(buf.validate.field).string.uuid = true];
+  string ulid     = 6 [(buf.validate.field).string.ulid = true];
+}
+
+// Bytes-rule matrix the original parity message did not cover.
+message BytesRuleMatrix {
+  bytes exact_len   = 1 [(buf.validate.field).bytes.len = 3];
+  bytes min_len     = 2 [(buf.validate.field).bytes.min_len = 2];
+  bytes max_len     = 3 [(buf.validate.field).bytes.max_len = 4];
+  bytes with_prefix = 4 [(buf.validate.field).bytes.prefix = "\x01\x02"];
+  bytes with_suffix = 5 [(buf.validate.field).bytes.suffix = "\xff\xfe"];
+  bytes with_sub    = 6 [(buf.validate.field).bytes.contains = "ab"];
+  bytes pattern     = 7 [(buf.validate.field).bytes.pattern = "^[0-9]+$"];
+  bytes from_list   = 8 [(buf.validate.field).bytes = { in: ["yes", "no"] }];
+  bytes not_in_list = 9 [(buf.validate.field).bytes = { not_in: ["nope"] }];
+}
+
+// Duration and Timestamp standard rules. `lt_now`/`gt_now`/`within` are
+// excluded by design — they route to runtime via the capability analyzer.
+message DurationTimestampRules {
+  google.protobuf.Duration  dur_const  = 1 [(buf.validate.field).duration.const = { seconds: 5 }];
+  google.protobuf.Duration  dur_range  = 2 [(buf.validate.field).duration = {
+    gte: { seconds: 0 },
+    lte: { seconds: 60 }
+  }];
+  google.protobuf.Timestamp ts_const   = 3 [(buf.validate.field).timestamp.const = { seconds: 1000 }];
+  google.protobuf.Timestamp ts_range   = 4 [(buf.validate.field).timestamp = {
+    gte: { seconds: 100 },
+    lte: { seconds: 200 }
+  }];
+}
+
+// `map.values.<scalar>.<rule>` — the original parity proto only tested map
+// keys and message-valued maps; scalar value rules close the dispatch gap.
+message MapScalarValues {
+  map<string, int32>  scores  = 1 [(buf.validate.field).map.values.int32.gt = 0];
+  map<int64, string>  by_id   = 2 [
+    (buf.validate.field).map.keys.int64.gt = 0,
+    (buf.validate.field).map.values.string.min_len = 1
+  ];
+}
+
+// `repeated.<scalar>.<rule>` items — the original parity proto exercised
+// per-item rules only for enums (defined_only). Non-enum scalar item
+// rules drive the `prepend_index` + `repeated.items.<rule>` path.
+message RepeatedScalarItems {
+  repeated string names    = 1 [(buf.validate.field).repeated.items.string.min_len = 2];
+  repeated bytes  payloads = 2 [(buf.validate.field).repeated.items.bytes.pattern = "^[A-Z]+$"];
+}
+
+// Virtual oneof (`MessageRules.oneof`) happy path. Real-oneof routing is
+// already covered by the capability tests — this exercises the
+// "exactly-one-of N regular fields" code path on both validation engines.
+message VirtualOneof {
+  option (buf.validate.message).oneof = { fields: ["a", "b"], required: true };
+  string a = 1;
+  string b = 2;
+}
+
+// Mixed proto3 `optional` + implicit scalars with rules. Regression guard
+// for the `field_storage_is_option_scalar` predicate: implicit scalars must
+// be accessed as `self.field` (bare T), proto3 `optional` scalars must go
+// through `Option<T>` unwrap. A mismatch fails to compile.
+message PresenceMix {
+  optional int32 maybe_n = 1 [(buf.validate.field).int32.gte = 0];
+  int32          plain_n = 2 [(buf.validate.field).int32.gte = 0];
+}
+
+// `bytes.pattern` applies to raw bytes — no UTF-8 decoding. Regression
+// guard for the runtime+codegen migration to `regex::bytes::Regex`:
+// invalid-UTF-8 input that doesn't match the pattern must produce a
+// `bytes.pattern` violation, not a runtime error.
+message BytesPatternRaw {
+  bytes value = 1 [(buf.validate.field).bytes.pattern = "^[A-Z]+$"];
+}
+
+// Float / double NaN, Infinity and the `finite` rule. Regression guard for
+// codegen parity with runtime — NaN must produce the runtime's range
+// violation (empty message, `<prefix>.<bound>` rule id, `<prefix>.<bound>`
+// rule path) and `finite = true` + NaN/Inf must produce a `<prefix>.finite`
+// violation. Without the codegen NaN guard, NaN passed every comparison.
+//
+// Every distinct `<prefix>.<bound>` rule id emitted by
+// `nan_range_rule_id_and_path` has at least one field below, so codegen
+// regressions on any single bound combination trip a parity test.
+message FloatFiniteRules {
+  // Two-bound inclusive (gt < lt): NaN should yield `float.gte_lte`.
+  float    range_f       = 1 [(buf.validate.field).float    = { gte: 0.0, lte: 100.0 }];
+  // Single bound `gt`: NaN should yield `double.gt`.
+  double   gt_only_d     = 2 [(buf.validate.field).double.gt = 0.0];
+  // Finite required, no range — Inf/NaN should yield `float.finite`.
+  float    finite_f      = 3 [(buf.validate.field).float.finite = true];
+  // Finite required + range — finite check wins; runtime emits only
+  // `double.finite` and codegen must do the same (no extra range violation).
+  double   finite_range  = 4 [(buf.validate.field).double = {
+    finite: true,
+    gte: 0.0,
+    lte: 1.0
+  }];
+  // gt + lt (inclusive when gt < lt): NaN → `float.gt_lt`.
+  float    gt_lt_f       = 5 [(buf.validate.field).float    = { gt: 0.0, lt: 100.0 }];
+  // gt + lt where gt > lt (exclusive range): NaN → `float.gt_lt_exclusive`.
+  float    gt_lt_excl_f  = 6 [(buf.validate.field).float    = { gt: 100.0, lt: 0.0 }];
+  // gt + lte (inclusive when gt < lte): NaN → `double.gt_lte`.
+  double   gt_lte_d      = 7 [(buf.validate.field).double   = { gt: 0.0, lte: 100.0 }];
+  // gte + lt where gte >= lt (exclusive): NaN → `double.gte_lt_exclusive`.
+  double   gte_lt_excl_d = 8 [(buf.validate.field).double   = { gte: 100.0, lt: 0.0 }];
+  // Single bound `gte`: NaN → `float.gte`.
+  float    gte_only_f    = 9 [(buf.validate.field).float.gte = 0.0];
+  // Single bound `lt`: NaN → `double.lt`.
+  double   lt_only_d     = 10 [(buf.validate.field).double.lt = 100.0];
+  // Single bound `lte`: NaN → `float.lte`.
+  float    lte_only_f    = 11 [(buf.validate.field).float.lte = 100.0];
+}
+
+// Virtual-oneof member with its own standard rule that would normally
+// fire on the zero value. Runtime applies the implicit
+// `IGNORE_IF_ZERO_VALUE` upgrade for fields listed in `message.oneof`,
+// so the unset member's standard rule is skipped. Codegen must mirror.
+//
+// Storage shapes vary: `alpha`/`beta` are strings, `gamma` is an int32
+// (numeric default-zero comparison), `delta` is a repeated-string (empty
+// list zero check). All four must receive the implicit upgrade. `epsilon`
+// has an explicit `IGNORE_ALWAYS` so it must be preserved (not "upgraded"
+// back to `IfZeroValue`) — regression guard for the conditional in
+// `generate_field_check`.
+message VirtualOneofImplicitIgnore {
+  option (buf.validate.message).oneof = {
+    fields: ["alpha", "beta", "gamma", "delta", "epsilon"]
+  };
+  // `alpha = ""` (unset) should NOT yield a `string.min_len` violation
+  // because the virtual-oneof membership implicitly upgrades the field's
+  // ignore to `IGNORE_IF_ZERO_VALUE`.
+  string alpha = 1 [(buf.validate.field).string.min_len = 5];
+  string beta  = 2;
+  // Numeric implicit-upgrade: `gamma = 0` (zero) must NOT violate `gt: 0`.
+  int32  gamma = 3 [(buf.validate.field).int32.gt = 0];
+  // Repeated implicit-upgrade: empty list must NOT violate `min_items: 1`.
+  repeated string delta = 4 [(buf.validate.field).repeated.min_items = 1];
+  // Explicit `IGNORE_ALWAYS`: the inner `string.min_len` rule must NEVER
+  // fire on this field, regardless of value. The implicit upgrade must
+  // not downgrade the explicit ignore.
+  string epsilon = 5 [(buf.validate.field) = {
+    ignore: IGNORE_ALWAYS,
+    string: { min_len: 100 }
+  }];
+}
+
+// `repeated.items.ignore` and `map.values.ignore` must be honored at the
+// per-element level. Runtime's nested `build_value(..., nested = true)`
+// passes the ignore through; codegen used to drop it.
+message NestedIgnore {
+  // `IGNORE_ALWAYS` on items: no item is ever validated against the rule.
+  repeated string items_skipped = 1 [(buf.validate.field).repeated.items = {
+    ignore: IGNORE_ALWAYS,
+    string: { min_len: 100 }
+  }];
+  // `IGNORE_IF_ZERO_VALUE` on items: empty-string items pass; non-empty
+  // items still validate against `min_len`.
+  repeated string items_zero_ok = 2 [(buf.validate.field).repeated.items = {
+    ignore: IGNORE_IF_ZERO_VALUE,
+    string: { min_len: 2 }
+  }];
+  // Same two policies on map values.
+  map<string, int32> map_skipped  = 3 [(buf.validate.field).map.values = {
+    ignore: IGNORE_ALWAYS,
+    int32: { gte: 1000 }
+  }];
+  map<string, string> map_zero_ok = 4 [(buf.validate.field).map.values = {
+    ignore: IGNORE_IF_ZERO_VALUE,
+    string: { min_len: 3 }
+  }];
+  // `map.keys.ignore = IGNORE_IF_ZERO_VALUE`: zero-valued keys (e.g. `0`)
+  // should skip the inner `int32.gt = 100` rule on both runtime and
+  // codegen. Non-zero keys still validate.
+  map<int32, string> keys_zero_ok = 5 [(buf.validate.field).map.keys = {
+    ignore: IGNORE_IF_ZERO_VALUE,
+    int32: { gt: 100 }
+  }];
+}
+
+// Proto3 implicit scalar with `required = true`. Runtime emits a `required`
+// violation when the value equals its type's zero (the only "absent" state
+// for bare-`T` storage). Codegen must NOT emit `self.x.is_none()` against
+// a bare scalar (would not compile); it uses the default-value predicate
+// instead. One field per `generate_default_check` branch so regressions in
+// any kind-specific zero comparison surface here.
+message RequiredImplicitScalar {
+  int32  forced_n  = 1 [(buf.validate.field).required = true, (buf.validate.field).int32.gte = 0];
+  // String: meaningful inner rule (was `min_len: 0` previously, a no-op).
+  string forced_s  = 2 [(buf.validate.field).required = true, (buf.validate.field).string.min_len = 1];
+  // Bool: zero is `false`; the non-default check is `self.x` (truthy).
+  bool   forced_b  = 3 [(buf.validate.field).required = true];
+  // Bytes: zero is empty.
+  bytes  forced_by = 4 [(buf.validate.field).required = true];
+  // Enum: zero is the first declared value (`Status::Unspecified == 0`).
+  Status forced_e  = 5 [(buf.validate.field).required = true];
+}

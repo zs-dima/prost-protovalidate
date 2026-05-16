@@ -1,0 +1,37 @@
+[package]
+name = "prost-protovalidate-tests"
+description = "Parity tests between build-time and runtime validation"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+default = ["cel"]
+# Mirrors the `cel` feature on `prost-protovalidate`. Disabling it lets the
+# parity tests run against the cel-off runtime, proving that generated code
+# stays parity-correct regardless of which runtime path is compiled in.
+cel = ["prost-protovalidate/cel"]
+
+[dependencies]
+prost = { workspace = true }
+prost-types = { workspace = true }
+# Declared explicitly (not via `workspace = true`) so this crate can opt out
+# of the workspace dep's default features and toggle `cel` per its own feature
+# flag. Cargo forbids overriding `default-features` through workspace
+# inheritance, hence the path/version pin duplicated here.
+prost-protovalidate = { path = "../prost-protovalidate", version = "=0.4.0", default-features = false }
+prost-protovalidate-types = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }
+prost-protovalidate-build = { workspace = true }
+
+[dev-dependencies]
+prost-reflect = { workspace = true }
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

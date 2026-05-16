@@ -1,4 +1,4 @@
-.PHONY: fmt fmt-check lint test check doc pre-commit publish-dry publish clean \
+.PHONY: fmt fmt-check lint test test-no-cel bench check doc doc-all pre-commit publish-dry publish clean \
        conformance-build conformance-harness conformance conformance-verbose
 
 fmt:
@@ -9,27 +9,41 @@ fmt-check:
 
 lint:
 	cargo clippy --all-targets --all-features -- -D warnings
-	@command -v cargo-deny >/dev/null 2>&1 && cargo deny check || echo "cargo-deny not installed, skipping (cargo install cargo-deny)"
+	cargo clippy --all-targets -p prost-protovalidate --no-default-features -- -D warnings
+	cargo deny check
 
 test:
 	cargo test --all-features
+
+test-no-cel:
+	cargo test -p prost-protovalidate --no-default-features
+
+bench:
+	cargo bench --all-features -p prost-protovalidate
 
 check:
 	cargo check --all-targets --all-features
 
 doc:
+	RUSTDOCFLAGS=-Dwarnings cargo doc --no-deps --all-features
+
+doc-all:
 	cargo doc --no-deps --all-features --document-private-items
 
-pre-commit: fmt-check lint test doc
+pre-commit: fmt-check lint test test-no-cel doc
 	@echo "All checks passed"
 
-# Publish in dependency order (types first, then main crate)
+# Publish in dependency order (types first, then build crate, then main crate)
 publish-dry:
 	cargo publish --dry-run -p prost-protovalidate-types
+	cargo publish --dry-run -p prost-protovalidate-build
 	cargo publish --dry-run -p prost-protovalidate
 
 publish:
 	cargo publish -p prost-protovalidate-types
+	@echo "Waiting for crates.io index to update..."
+	@sleep 30
+	cargo publish -p prost-protovalidate-build
 	@echo "Waiting for crates.io index to update..."
 	@sleep 30
 	cargo publish -p prost-protovalidate

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+use cel::common::ast::{EntryExpr, Expr, IdedExpr};
 use cel::extractors::{Arguments, This};
 use cel::objects::Key as CelKey;
 use cel::{
@@ -16,6 +17,114 @@ use crate::violation::Violation;
 
 use super::super::rules::string as string_rules;
 use super::{Evaluator, MessageEvaluator};
+
+/// Dotted field paths used by `has(...)` in a compiled CEL program, rooted at
+/// a specific top-level binding (`this`, `rules`, or `rule`).
+///
+/// Each entry is a vector of field names from the binding root to the field
+/// queried by `has()`. When the corresponding message is reflected into CEL,
+/// fields whose path is in this set are *omitted* from the resulting map if
+/// they are absent — so `has()` correctly returns `false`. Fields **not** in
+/// the set are emitted with default values, so direct-access expressions like
+/// `this.x.y == 1` still see spec-compliant defaults.
+pub(crate) type PresencePaths = HashSet<Vec<String>>;
+
+/// Walks a compiled CEL program's AST and collects every dotted field path
+/// reached by `has(<binding>.path...)`. Paths that bottom out at any other
+/// identifier (comprehension variables, dynamic operands, unknown roots) are
+/// ignored — those code paths fall through to the default-value branch when
+/// reflecting messages, which is the safe choice.
+pub(crate) fn collect_has_paths(program: &Program, binding: &str) -> PresencePaths {
+    let mut paths = PresencePaths::new();
+    walk_expr_for_has(program.expression(), binding, &mut paths);
+    paths
+}
+
+fn walk_expr_for_has(ided: &IdedExpr, binding: &str, paths: &mut PresencePaths) {
+    match &ided.expr {
+        Expr::Select(s) => {
+            walk_expr_for_has(&s.operand, binding, paths);
+            if s.test
+                && let Some(path) = extract_select_path(&s.operand, &s.field, binding)
+            {
+                paths.insert(path);
+            }
+        }
+        Expr::Call(c) => {
+            if let Some(target) = &c.target {
+                walk_expr_for_has(target, binding, paths);
+            }
+            for arg in &c.args {
+                walk_expr_for_has(arg, binding, paths);
+            }
+        }
+        Expr::Comprehension(c) => {
+            walk_expr_for_has(&c.iter_range, binding, paths);
+            walk_expr_for_has(&c.accu_init, binding, paths);
+            walk_expr_for_has(&c.loop_cond, binding, paths);
+            walk_expr_for_has(&c.loop_step, binding, paths);
+            walk_expr_for_has(&c.result, binding, paths);
+        }
+        Expr::List(l) => {
+            for el in &l.elements {
+                walk_expr_for_has(el, binding, paths);
+            }
+        }
+        Expr::Map(m) => {
+            for entry in &m.entries {
+                match &entry.expr {
+                    EntryExpr::MapEntry(me) => {
+                        walk_expr_for_has(&me.key, binding, paths);
+                        walk_expr_for_has(&me.value, binding, paths);
+                    }
+                    EntryExpr::StructField(sf) => {
+                        walk_expr_for_has(&sf.value, binding, paths);
+                    }
+                }
+            }
+        }
+        Expr::Struct(s) => {
+            for entry in &s.entries {
+                match &entry.expr {
+                    EntryExpr::MapEntry(me) => {
+                        walk_expr_for_has(&me.key, binding, paths);
+                        walk_expr_for_has(&me.value, binding, paths);
+                    }
+                    EntryExpr::StructField(sf) => {
+                        walk_expr_for_has(&sf.value, binding, paths);
+                    }
+                }
+            }
+        }
+        Expr::Unspecified | Expr::Ident(_) | Expr::Literal(_) => {}
+    }
+}
+
+/// Climbs a chain of non-test `Select`s starting at `operand` until it hits
+/// an `Ident` matching `target_binding`, building the dotted path from root to
+/// `leaf`. Returns `None` for any other shape (comprehension iterators,
+/// arbitrary expressions) — those are intentionally not registered.
+fn extract_select_path(
+    operand: &IdedExpr,
+    leaf: &str,
+    target_binding: &str,
+) -> Option<Vec<String>> {
+    let mut path = vec![leaf.to_string()];
+    let mut current = &operand.expr;
+    loop {
+        match current {
+            Expr::Select(s) if !s.test => {
+                path.push(s.field.clone());
+                current = &s.operand.expr;
+            }
+            Expr::Ident(name) if name == target_binding => {
+                path.reverse();
+                return Some(path);
+            }
+            _ => return None,
+        }
+    }
+}
 
 /// Controls how violations are generated for different CEL rule contexts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,14 +142,25 @@ pub(crate) struct CelRuleProgram {
     pub message: Option<String>,
     pub rule_path: String,
     pub program: Program,
-    pub rule_binding: Option<CelValue>,
-    pub rules_binding: Option<CelValue>,
+    /// Raw `rules` binding source — reflected into a CEL value per-evaluation
+    /// using `rules_presence_paths`, so `has(rules.x)` and `rules.x` honour
+    /// the program's actual usage of `has()`.
+    pub rules_message: Option<DynamicMessage>,
     pub rule_descriptor: Option<FieldDescriptor>,
+    /// Raw `rule` binding source (a single field's value, often itself a
+    /// message). Reflected into a CEL value per-evaluation using
+    /// `rule_presence_paths`.
     pub rule_value: Option<prost_reflect::Value>,
     /// Extension field path element for predefined rule violations.
     pub extension_element: Option<prost_protovalidate_types::FieldPathElement>,
     /// Violation output mode (field-level vs message-level).
     pub violation_mode: CelViolationMode,
+    /// Dotted paths reached by `has(this. ...)` in this program's AST.
+    pub this_presence_paths: PresencePaths,
+    /// Dotted paths reached by `has(rules. ...)` in this program's AST.
+    pub rules_presence_paths: PresencePaths,
+    /// Dotted paths reached by `has(rule. ...)` in this program's AST.
+    pub rule_presence_paths: PresencePaths,
 }
 
 impl CelRuleProgram {
@@ -49,7 +169,8 @@ impl CelRuleProgram {
         msg: &DynamicMessage,
         cfg: &ValidationConfig,
     ) -> Result<Option<Violation>, Error> {
-        self.evaluate_with_this_value(reflect_message_to_cel(msg)?, cfg)
+        let this = reflect_message_to_cel(msg, &self.this_presence_paths, &[])?;
+        self.evaluate_with_this_value(this, cfg)
     }
 
     fn evaluate_value_with_this(
@@ -57,7 +178,8 @@ impl CelRuleProgram {
         val: &prost_reflect::Value,
         cfg: &ValidationConfig,
     ) -> Result<Option<Violation>, Error> {
-        self.evaluate_with_this_value(reflect_value_to_cel(val)?, cfg)
+        let this = reflect_value_to_cel(val, &self.this_presence_paths, &[])?;
+        self.evaluate_with_this_value(this, cfg)
     }
 
     fn evaluate_with_this_value(
@@ -73,11 +195,13 @@ impl CelRuleProgram {
             .map_err(|e| RuntimeError {
                 cause: format!("failed to bind CEL variable `now`: {e}"),
             })?;
-        if let Some(rule) = &self.rule_binding {
-            ctx.add_variable_from_value("rule", rule.clone());
+        if let Some(rule_value) = &self.rule_value {
+            let rule_cel = reflect_value_to_cel(rule_value, &self.rule_presence_paths, &[])?;
+            ctx.add_variable_from_value("rule", rule_cel);
         }
-        if let Some(rules) = &self.rules_binding {
-            ctx.add_variable_from_value("rules", rules.clone());
+        if let Some(rules_msg) = &self.rules_message {
+            let rules_cel = reflect_message_to_cel(rules_msg, &self.rules_presence_paths, &[])?;
+            ctx.add_variable_from_value("rules", rules_cel);
         }
 
         let value = self.program.execute(&ctx).map_err(|e| RuntimeError {
@@ -561,6 +685,7 @@ impl Evaluator for CelFieldEval {
     }
 }
 
+#[allow(clippy::similar_names)] // `rule_presence_paths` vs `rules_presence_paths` is the intended distinction.
 pub(crate) fn compile_programs(
     simple_exprs: &[String],
     rules: &[prost_protovalidate_types::Rule],
@@ -574,17 +699,22 @@ pub(crate) fn compile_programs(
         let program = Program::compile(expr).map_err(|e| CompilationError {
             cause: format!("failed to compile CEL expression `{expr}`: {e}"),
         })?;
+        let this_presence_paths = collect_has_paths(&program, "this");
+        let rules_presence_paths = collect_has_paths(&program, "rules");
+        let rule_presence_paths = collect_has_paths(&program, "rule");
         out.push(CelRuleProgram {
             rule_id: expr.clone(),
             message: None,
             rule_path: format!("{path_prefix}_expression[{idx}]"),
             program,
-            rule_binding: None,
-            rules_binding: None,
+            rules_message: None,
             rule_descriptor: None,
             rule_value: None,
             extension_element: None,
             violation_mode: simple_mode,
+            this_presence_paths,
+            rules_presence_paths,
+            rule_presence_paths,
         });
     }
 
@@ -596,35 +726,34 @@ pub(crate) fn compile_programs(
         let program = Program::compile(&expr).map_err(|e| CompilationError {
             cause: format!("failed to compile CEL rule `{expr}`: {e}"),
         })?;
+        let this_presence_paths = collect_has_paths(&program, "this");
+        let rules_presence_paths = collect_has_paths(&program, "rules");
+        let rule_presence_paths = collect_has_paths(&program, "rule");
 
         out.push(CelRuleProgram {
             rule_id: rule.id.clone().unwrap_or_else(|| expr.clone()),
             message: rule.message.clone(),
             rule_path: format!("{path_prefix}[{idx}]"),
             program,
-            rule_binding: None,
-            rules_binding: None,
+            rules_message: None,
             rule_descriptor: None,
             rule_value: None,
             extension_element: None,
             violation_mode: rule_mode,
+            this_presence_paths,
+            rules_presence_paths,
+            rule_presence_paths,
         });
     }
 
     Ok(out)
 }
 
-pub(crate) fn message_to_cel_value(msg: &DynamicMessage) -> Result<CelValue, CompilationError> {
-    reflect_message_to_cel(msg).map_err(|err| CompilationError { cause: err.cause })
-}
-
-pub(crate) fn value_to_cel_value(
-    value: &prost_reflect::Value,
-) -> Result<CelValue, CompilationError> {
-    reflect_value_to_cel(value).map_err(|err| CompilationError { cause: err.cause })
-}
-
-fn reflect_message_to_cel(msg: &DynamicMessage) -> Result<CelValue, RuntimeError> {
+fn reflect_message_to_cel(
+    msg: &DynamicMessage,
+    presence_paths: &PresencePaths,
+    current_path: &[String],
+) -> Result<CelValue, RuntimeError> {
     // Unwrap well-known wrapper types to their inner scalar value.
     if let Some(cel) = try_unwrap_well_known_message(msg) {
         return Ok(cel);
@@ -632,19 +761,23 @@ fn reflect_message_to_cel(msg: &DynamicMessage) -> Result<CelValue, RuntimeError
     let mut out: HashMap<CelKey, CelValue> = HashMap::new();
     for field in msg.descriptor().fields() {
         let has_field = msg.has_field(&field);
+        let field_name = field.name().to_string();
+        let mut field_path = Vec::with_capacity(current_path.len() + 1);
+        field_path.extend_from_slice(current_path);
+        field_path.push(field_name.clone());
 
-        let value = if has_field {
-            reflect_value_to_cel(&msg.get_field(&field))?
+        let value = if has_field || field.is_map() || field.is_list() {
+            reflect_value_to_cel(&msg.get_field(&field), presence_paths, &field_path)?
+        } else if presence_paths.contains(&field_path) {
+            // `has()` is used on this exact path — omit the key so the CEL
+            // map-key check correctly returns `false` for the absent field.
+            continue;
         } else if let Some(message_desc) = field.kind().as_message() {
-            if field.is_map() || field.is_list() {
-                reflect_value_to_cel(&field.default_value())?
-            } else {
-                absent_message_to_cel(message_desc)?
-            }
+            absent_message_to_cel(message_desc, presence_paths, &field_path)?
         } else {
-            reflect_value_to_cel(&field.default_value())?
+            reflect_value_to_cel(&field.default_value(), presence_paths, &field_path)?
         };
-        out.insert(CelKey::String(Arc::new(field.name().to_string())), value);
+        out.insert(CelKey::String(Arc::new(field_name)), value);
     }
     Ok(CelValue::Map(out.into()))
 }
@@ -738,18 +871,33 @@ fn try_unwrap_well_known_message(msg: &DynamicMessage) -> Option<CelValue> {
     }
 }
 
-fn absent_message_to_cel(message: &MessageDescriptor) -> Result<CelValue, RuntimeError> {
+fn absent_message_to_cel(
+    message: &MessageDescriptor,
+    presence_paths: &PresencePaths,
+    current_path: &[String],
+) -> Result<CelValue, RuntimeError> {
     let mut out: HashMap<CelKey, CelValue> = HashMap::new();
 
     for field in message.fields() {
-        let value = if field.kind().as_message().is_some() && !field.is_map() {
+        let field_name = field.name().to_string();
+        let mut field_path = Vec::with_capacity(current_path.len() + 1);
+        field_path.extend_from_slice(current_path);
+        field_path.push(field_name.clone());
+
+        if presence_paths.contains(&field_path) {
+            // `has()` is used on this nested path through an absent message —
+            // omit the key so `has()` correctly reports `false`.
+            continue;
+        }
+
+        let value = if field.kind().as_message().is_some() && !field.is_map() && !field.is_list() {
             // For absent nested messages, expose a shallow object so chained
             // selectors can read scalar defaults without infinite recursion.
             CelValue::Map(HashMap::<CelKey, CelValue>::new().into())
         } else {
-            reflect_value_to_cel(&field.default_value())?
+            reflect_value_to_cel(&field.default_value(), presence_paths, &field_path)?
         };
-        out.insert(CelKey::String(Arc::new(field.name().to_string())), value);
+        out.insert(CelKey::String(Arc::new(field_name)), value);
     }
 
     Ok(CelValue::Map(out.into()))
@@ -766,7 +914,11 @@ fn reflect_map_key_to_cel(key: &prost_reflect::MapKey) -> CelKey {
     }
 }
 
-fn reflect_value_to_cel(value: &prost_reflect::Value) -> Result<CelValue, RuntimeError> {
+fn reflect_value_to_cel(
+    value: &prost_reflect::Value,
+    presence_paths: &PresencePaths,
+    current_path: &[String],
+) -> Result<CelValue, RuntimeError> {
     match value {
         prost_reflect::Value::Bool(v) => Ok(CelValue::Bool(*v)),
         prost_reflect::Value::I32(v) | prost_reflect::Value::EnumNumber(v) => {
@@ -779,18 +931,23 @@ fn reflect_value_to_cel(value: &prost_reflect::Value) -> Result<CelValue, Runtim
         prost_reflect::Value::F64(v) => Ok(CelValue::Float(*v)),
         prost_reflect::Value::String(v) => Ok(CelValue::String(Arc::new(v.clone()))),
         prost_reflect::Value::Bytes(v) => Ok(CelValue::Bytes(Arc::new(v.to_vec()))),
-        prost_reflect::Value::Message(m) => reflect_message_to_cel(m),
+        prost_reflect::Value::Message(m) => reflect_message_to_cel(m, presence_paths, current_path),
         prost_reflect::Value::List(values) => {
+            // List elements share the parent list's path — `has()` cannot
+            // address individual indices, so per-element pathing isn't needed.
             let mut out = Vec::with_capacity(values.len());
             for value in values {
-                out.push(reflect_value_to_cel(value)?);
+                out.push(reflect_value_to_cel(value, presence_paths, current_path)?);
             }
             Ok(CelValue::List(Arc::new(out)))
         }
         prost_reflect::Value::Map(map) => {
             let mut out: HashMap<CelKey, CelValue> = HashMap::with_capacity(map.len());
             for (key, value) in map {
-                out.insert(reflect_map_key_to_cel(key), reflect_value_to_cel(value)?);
+                out.insert(
+                    reflect_map_key_to_cel(key),
+                    reflect_value_to_cel(value, presence_paths, current_path)?,
+                );
             }
             Ok(CelValue::Map(out.into()))
         }
@@ -809,28 +966,41 @@ mod tests {
     use crate::config::ValidationConfig;
     use crate::error::Error;
 
+    fn no_presence() -> PresencePaths {
+        PresencePaths::new()
+    }
+
     #[test]
     fn reflect_value_to_cel_passes_through_non_finite_floats() {
-        let nan = reflect_value_to_cel(&prost_reflect::Value::F32(f32::NAN))
+        let nan = reflect_value_to_cel(&prost_reflect::Value::F32(f32::NAN), &no_presence(), &[])
             .expect("NaN should convert to CEL value");
         let CelValue::Float(v) = nan else {
             panic!("expected float value");
         };
         assert!(v.is_nan());
 
-        let inf = reflect_value_to_cel(&prost_reflect::Value::F64(f64::INFINITY))
-            .expect("Infinity should convert to CEL value");
+        let inf = reflect_value_to_cel(
+            &prost_reflect::Value::F64(f64::INFINITY),
+            &no_presence(),
+            &[],
+        )
+        .expect("Infinity should convert to CEL value");
         assert_eq!(inf, CelValue::Float(f64::INFINITY));
 
-        let neg_inf = reflect_value_to_cel(&prost_reflect::Value::F64(f64::NEG_INFINITY))
-            .expect("NEG_INFINITY should convert to CEL value");
+        let neg_inf = reflect_value_to_cel(
+            &prost_reflect::Value::F64(f64::NEG_INFINITY),
+            &no_presence(),
+            &[],
+        )
+        .expect("NEG_INFINITY should convert to CEL value");
         assert_eq!(neg_inf, CelValue::Float(f64::NEG_INFINITY));
     }
 
     #[test]
     fn reflect_value_to_cel_passes_through_nested_non_finite_values() {
         let value = prost_reflect::Value::List(vec![prost_reflect::Value::F64(f64::NEG_INFINITY)]);
-        let cel = reflect_value_to_cel(&value).expect("nested Infinity should convert");
+        let cel = reflect_value_to_cel(&value, &no_presence(), &[])
+            .expect("nested Infinity should convert");
         let CelValue::List(items) = cel else {
             panic!("expected list value");
         };
@@ -845,7 +1015,8 @@ mod tests {
             prost_reflect::Value::String("one".to_string()),
         );
         let value = prost_reflect::Value::Map(map);
-        let cel_value = reflect_value_to_cel(&value).expect("conversion should succeed");
+        let cel_value =
+            reflect_value_to_cel(&value, &no_presence(), &[]).expect("conversion should succeed");
         let CelValue::Map(map) = cel_value else {
             panic!("expected map value");
         };
@@ -969,24 +1140,28 @@ mod tests {
             message: Some("fizz".to_string()),
             rule_path: "cel[0]".to_string(),
             program: Program::compile("false").expect("program should compile"),
-            rule_binding: None,
-            rules_binding: None,
+            rules_message: None,
             rule_descriptor: None,
             rule_value: None,
             extension_element: None,
             violation_mode: CelViolationMode::Field,
+            this_presence_paths: no_presence(),
+            rules_presence_paths: no_presence(),
+            rule_presence_paths: no_presence(),
         };
         let string_program = CelRuleProgram {
             rule_id: "bar".to_string(),
             message: None,
             rule_path: "cel[1]".to_string(),
             program: Program::compile("'buzz'").expect("program should compile"),
-            rule_binding: None,
-            rules_binding: None,
+            rules_message: None,
             rule_descriptor: None,
             rule_value: None,
             extension_element: None,
             violation_mode: CelViolationMode::Field,
+            this_presence_paths: no_presence(),
+            rules_presence_paths: no_presence(),
+            rule_presence_paths: no_presence(),
         };
 
         let bool_violation = bool_program
@@ -1008,12 +1183,14 @@ mod tests {
             message: None,
             rule_path: "cel[2]".to_string(),
             program: Program::compile("1.23").expect("program should compile"),
-            rule_binding: None,
-            rules_binding: None,
+            rules_message: None,
             rule_descriptor: None,
             rule_value: None,
             extension_element: None,
             violation_mode: CelViolationMode::Field,
+            this_presence_paths: no_presence(),
+            rules_presence_paths: no_presence(),
+            rule_presence_paths: no_presence(),
         };
         assert!(matches!(
             invalid_type_program.evaluate_value_with_this(&prost_reflect::Value::Bool(false), &cfg),
@@ -1101,5 +1278,155 @@ mod tests {
         let program = Program::compile("int(uint(5))").expect("should compile");
         let result = program.execute(&ctx).expect("should execute");
         assert_eq!(result, CelValue::Int(5));
+    }
+
+    // ---- presence-aware reflection tests ----
+    //
+    // The two tests below were originally introduced by PR #7 to demonstrate
+    // that `has(this.string)` should return `false` for an unset oneof
+    // message member (and `true` once it's set). They are preserved verbatim
+    // — under AST-driven asymmetric reflection they still pass, alongside
+    // the spec-compliant default-value access exercised by the tests further
+    // down.
+
+    #[test]
+    fn absent_presence_tracking_fields_are_absent_for_cel_has() {
+        let descriptor = prost_protovalidate_types::FieldRules::default().descriptor();
+        let message = DynamicMessage::new(descriptor);
+
+        let has_program = Program::compile("has(this.string)").expect("program should compile");
+        let presence = collect_has_paths(&has_program, "this");
+        let this = reflect_message_to_cel(&message, &presence, &[])
+            .expect("message should convert to CEL");
+        let mut ctx = build_cel_context();
+        ctx.add_variable_from_value("this", this);
+        let has_absent_oneof_message = has_program.execute(&ctx).expect("execution should succeed");
+        assert_eq!(has_absent_oneof_message, CelValue::Bool(false));
+
+        let guarded_program = Program::compile("!has(this.string) || this.string.min_len == 1")
+            .expect("program should compile");
+        let presence = collect_has_paths(&guarded_program, "this");
+        let this =
+            reflect_message_to_cel(&message, &presence, &[]).expect("message should convert");
+        let mut ctx = build_cel_context();
+        ctx.add_variable_from_value("this", this);
+        let guarded_absent_oneof_message = guarded_program
+            .execute(&ctx)
+            .expect("execution should short-circuit instead of reading an absent message");
+        assert_eq!(guarded_absent_oneof_message, CelValue::Bool(true));
+    }
+
+    #[test]
+    fn present_presence_tracking_fields_are_present_for_cel_has() {
+        let descriptor = prost_protovalidate_types::FieldRules::default().descriptor();
+        let string_field = descriptor
+            .get_field_by_name("string")
+            .expect("FieldRules should have string rules");
+        let string_message = DynamicMessage::new(
+            string_field
+                .kind()
+                .as_message()
+                .expect("string rules should be a message")
+                .clone(),
+        );
+        let mut message = DynamicMessage::new(descriptor);
+        message.set_field(&string_field, prost_reflect::Value::Message(string_message));
+
+        let program = Program::compile("has(this.string)").expect("program should compile");
+        let presence = collect_has_paths(&program, "this");
+        let this = reflect_message_to_cel(&message, &presence, &[])
+            .expect("message should convert to CEL");
+        let mut ctx = build_cel_context();
+        ctx.add_variable_from_value("this", this);
+        let has_present_oneof_message = program.execute(&ctx).expect("execution should succeed");
+        assert_eq!(has_present_oneof_message, CelValue::Bool(true));
+    }
+
+    /// Regression test for the `ignore_proto2 / ignore_proto3 / ignore_editions`
+    /// conformance suite. With the outer message field set to an empty
+    /// submessage and the inner field being a proto3 `optional` scalar,
+    /// direct-access expressions without `has()` guards must see the inner
+    /// scalar at its default value rather than erroring with "No such key".
+    #[test]
+    fn absent_presence_tracked_scalar_inside_present_message_returns_default() {
+        let descriptor = prost_protovalidate_types::FieldRules::default().descriptor();
+        let string_field = descriptor
+            .get_field_by_name("string")
+            .expect("FieldRules should have string rules");
+        let string_message = DynamicMessage::new(
+            string_field
+                .kind()
+                .as_message()
+                .expect("string rules should be a message")
+                .clone(),
+        );
+        let mut message = DynamicMessage::new(descriptor);
+        message.set_field(&string_field, prost_reflect::Value::Message(string_message));
+
+        // `suffix` is `optional string suffix = 6;` in StringRules — a
+        // presence-tracked scalar. The expression doesn't use `has()`, so the
+        // AST walker leaves the path alone and reflection synthesizes the
+        // default value `""`.
+        let program = Program::compile("this.string.suffix == ''").expect("program should compile");
+        let presence = collect_has_paths(&program, "this");
+        let this =
+            reflect_message_to_cel(&message, &presence, &[]).expect("message should convert");
+        let mut ctx = build_cel_context();
+        ctx.add_variable_from_value("this", this);
+        let result = program
+            .execute(&ctx)
+            .expect("absent presence-tracked scalar should resolve to its default, not error");
+        assert_eq!(result, CelValue::Bool(true));
+    }
+
+    /// Regression test for the `custom_rules / message_expression_embed`
+    /// conformance case. An absent presence-tracked **message** field that's
+    /// accessed via chained selectors (without a `has()` guard) must
+    /// synthesize a shallow default-populated map so the chained scalar
+    /// access returns the scalar's default value.
+    #[test]
+    fn absent_message_field_chained_access_returns_default() {
+        let descriptor = prost_protovalidate_types::FieldRules::default().descriptor();
+        let message = DynamicMessage::new(descriptor);
+
+        // `this.string` is absent (the oneof is unset). `this.string.suffix`
+        // is a chained scalar selector. Without `has()` it must read as the
+        // scalar default.
+        let program = Program::compile("this.string.suffix == ''").expect("program should compile");
+        let presence = collect_has_paths(&program, "this");
+        let this =
+            reflect_message_to_cel(&message, &presence, &[]).expect("message should convert");
+        let mut ctx = build_cel_context();
+        ctx.add_variable_from_value("this", this);
+        let result = program
+            .execute(&ctx)
+            .expect("chained access on absent presence-tracked message should resolve to default");
+        assert_eq!(result, CelValue::Bool(true));
+    }
+
+    /// Unit test for the AST walker itself: verify it correctly extracts
+    /// `has()` paths for the relevant top-level bindings while ignoring
+    /// comprehension-local iter variables and other-binding accesses.
+    #[test]
+    fn ast_walker_collects_has_paths_for_known_bindings() {
+        let p1 = Program::compile("has(this.x)").expect("compile");
+        let paths = collect_has_paths(&p1, "this");
+        assert!(paths.contains(&vec!["x".to_string()]));
+        assert_eq!(paths.len(), 1);
+
+        let p2 = Program::compile("has(this.x.y)").expect("compile");
+        let paths = collect_has_paths(&p2, "this");
+        assert!(paths.contains(&vec!["x".to_string(), "y".to_string()]));
+
+        // `has(rules.lt)` registers only under the `rules` binding.
+        let p3 = Program::compile("has(rules.lt)").expect("compile");
+        assert!(collect_has_paths(&p3, "rules").contains(&vec!["lt".to_string()]));
+        assert!(collect_has_paths(&p3, "this").is_empty());
+
+        // Comprehension-local `item.x` must not count under the outer `this`
+        // binding — the operand chain bottoms out at `Ident("item")`, not
+        // `Ident("this")`.
+        let p4 = Program::compile("this.list.exists(item, has(item.x))").expect("compile");
+        assert!(collect_has_paths(&p4, "this").is_empty());
     }
 }

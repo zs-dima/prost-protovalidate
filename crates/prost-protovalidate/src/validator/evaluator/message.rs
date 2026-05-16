@@ -44,6 +44,7 @@ impl MessageEval {
         state.err.as_ref().map(|err| err.cause.clone())
     }
 
+    #[cfg(feature = "cel")]
     pub fn append(&self, eval: Box<dyn MessageEvaluator>) {
         if !eval.tautology() {
             let mut state = self

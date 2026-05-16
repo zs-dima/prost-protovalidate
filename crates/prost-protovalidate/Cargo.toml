@@ -16,6 +16,11 @@ include = ["src/", "LICENSE-*", "README.md"]
 
 [package.metadata.docs.rs]
 all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+default = ["cel"]
+cel = ["dep:cel", "dep:chrono"]
 
 [dependencies]
 prost-protovalidate-types = { workspace = true }
@@ -25,13 +30,19 @@ prost-reflect = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true }
-cel = { workspace = true }
+chrono = { workspace = true, optional = true }
+cel = { workspace = true, optional = true }
 fluent-uri = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
+criterion = { workspace = true }
+prost-build = { workspace = true }
+
+[[bench]]
+name = "validate"
+harness = false
 
 [lints]
 workspace = true

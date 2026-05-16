@@ -136,6 +136,10 @@ impl BytesRuleEval {
         }
 
         if let Some(ref pat) = self.pattern {
+            // Canonical buf protovalidate refuses to apply the regex to a
+            // non-UTF-8 byte string — the conformance harness asserts this
+            // exact runtime-error path. Keep the UTF-8 gate; only matching
+            // bytes that are valid UTF-8 may proceed to the pattern check.
             if std::str::from_utf8(b).is_err() {
                 return Err(RuntimeError {
                     cause: "value must be valid UTF-8 to apply regexp".to_string(),
