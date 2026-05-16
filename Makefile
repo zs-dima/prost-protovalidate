@@ -1,5 +1,6 @@
 .PHONY: fmt fmt-check lint test test-no-cel bench check doc doc-all pre-commit publish-dry publish clean \
-       conformance-build conformance-harness conformance conformance-verbose
+       conformance-build conformance-harness conformance conformance-verbose \
+       sync-schema sync-schema-check
 
 fmt:
 	cargo fmt --all
@@ -48,9 +49,25 @@ publish:
 	@sleep 30
 	cargo publish -p prost-protovalidate
 
-# Pinned upstream versions for conformance tooling and schema sync docs.
+# Pinned upstream version for the conformance tools and the buf.validate schema. Bump together unless a deliberate split is required.
 PROTOVALIDATE_TOOLS_VERSION ?= v1.1.1
 PROTOVALIDATE_SCHEMA_REF ?= v1.1.1
+
+SCHEMA_DEST = crates/prost-protovalidate-types/proto/buf/validate/validate.proto
+SCHEMA_URL  = https://raw.githubusercontent.com/bufbuild/protovalidate/$(PROTOVALIDATE_SCHEMA_REF)/proto/protovalidate/buf/validate/validate.proto
+
+# Re-vendor validate.proto from the pinned upstream tag.
+# Override the ref ad-hoc: `make sync-schema PROTOVALIDATE_SCHEMA_REF=v1.2.0`.
+sync-schema:
+	curl -fsSL "$(SCHEMA_URL)" -o "$(SCHEMA_DEST)"
+
+# Used by CI: re-vendor into a temp file and fail if it differs from the
+# committed copy. Does not touch the working tree.
+sync-schema-check:
+	@tmp="$$(mktemp)"; \
+	curl -fsSL "$(SCHEMA_URL)" -o "$$tmp"; \
+	diff -u "$(SCHEMA_DEST)" "$$tmp" || { rm -f "$$tmp"; echo "drift: $(SCHEMA_DEST) is out of sync with $(PROTOVALIDATE_SCHEMA_REF)"; exit 1; }; \
+	rm -f "$$tmp"
 
 # Conformance tests use a pinned upstream protovalidate harness binary.
 CONFORMANCE_HARNESS = target/protovalidate-conformance$(shell go env GOEXE)

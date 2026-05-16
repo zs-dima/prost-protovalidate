@@ -16,16 +16,5 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Buf
-        uses: bufbuild/buf-setup-action@v1
-
-      - name: Sync pinned buf.validate schema
-        working-directory: crates/prost-protovalidate-types
-        run: |
-          buf dep update
-          mkdir -p proto/buf/validate
-          buf export buf.build/bufbuild/protovalidate --output proto --path buf/validate/validate.proto
-
-      - name: Verify no schema drift
-        run: |
-          git diff --exit-code -- crates/prost-protovalidate-types/buf.lock crates/prost-protovalidate-types/proto/buf/validate/validate.proto
+      - name: Verify validate.proto matches PROTOVALIDATE_SCHEMA_REF
+        run: make sync-schema-check

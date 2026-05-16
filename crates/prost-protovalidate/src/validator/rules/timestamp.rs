@@ -288,41 +288,33 @@ fn check_timestamp_range(
             }
         }
         // single bounds
-        (Some(gt), None, None, None) => {
-            if !ts_gt(v, gt) {
-                violations.push(Violation::new(
-                    "",
-                    "timestamp.gt",
-                    "must be greater than specified timestamp",
-                ));
-            }
+        (Some(gt), None, None, None) if !ts_gt(v, gt) => {
+            violations.push(Violation::new(
+                "",
+                "timestamp.gt",
+                "must be greater than specified timestamp",
+            ));
         }
-        (None, Some(gte), None, None) => {
-            if ts_lt(v, gte) {
-                violations.push(Violation::new(
-                    "",
-                    "timestamp.gte",
-                    "must be greater than or equal to specified timestamp",
-                ));
-            }
+        (None, Some(gte), None, None) if ts_lt(v, gte) => {
+            violations.push(Violation::new(
+                "",
+                "timestamp.gte",
+                "must be greater than or equal to specified timestamp",
+            ));
         }
-        (None, None, Some(lt), None) => {
-            if !ts_lt(v, lt) {
-                violations.push(Violation::new(
-                    "",
-                    "timestamp.lt",
-                    "must be less than specified timestamp",
-                ));
-            }
+        (None, None, Some(lt), None) if !ts_lt(v, lt) => {
+            violations.push(Violation::new(
+                "",
+                "timestamp.lt",
+                "must be less than specified timestamp",
+            ));
         }
-        (None, None, None, Some(lte)) => {
-            if ts_gt(v, lte) {
-                violations.push(Violation::new(
-                    "",
-                    "timestamp.lte",
-                    "must be less than or equal to specified timestamp",
-                ));
-            }
+        (None, None, None, Some(lte)) if ts_gt(v, lte) => {
+            violations.push(Violation::new(
+                "",
+                "timestamp.lte",
+                "must be less than or equal to specified timestamp",
+            ));
         }
         _ => {}
     }

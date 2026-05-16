@@ -106,6 +106,10 @@ jobs:
       - uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           package: prost-protovalidate
-      - uses: obi1kenobi/cargo-semver-checks-action@v2
-        with:
-          package: prost-protovalidate-build
+      # TODO: re-enable once prost-protovalidate-build is published to crates.io
+      # (first release: v0.4.0). Until then there is no baseline version to
+      # compare against and the action errors:
+      #   prost-protovalidate-build not found in registry (crates.io)
+      # - uses: obi1kenobi/cargo-semver-checks-action@v2
+      #   with:
+      #     package: prost-protovalidate-build

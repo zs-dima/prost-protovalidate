@@ -299,41 +299,33 @@ fn check_duration_range(
             }
         }
         // single bounds
-        (Some(gt), None, None, None) => {
-            if !dur_gt(v, gt) {
-                violations.push(Violation::new(
-                    "",
-                    "duration.gt",
-                    format!("value must be greater than {}", fmt_dur(gt)),
-                ));
-            }
+        (Some(gt), None, None, None) if !dur_gt(v, gt) => {
+            violations.push(Violation::new(
+                "",
+                "duration.gt",
+                format!("value must be greater than {}", fmt_dur(gt)),
+            ));
         }
-        (None, Some(gte), None, None) => {
-            if dur_lt(v, gte) {
-                violations.push(Violation::new(
-                    "",
-                    "duration.gte",
-                    format!("value must be greater than or equal to {}", fmt_dur(gte)),
-                ));
-            }
+        (None, Some(gte), None, None) if dur_lt(v, gte) => {
+            violations.push(Violation::new(
+                "",
+                "duration.gte",
+                format!("value must be greater than or equal to {}", fmt_dur(gte)),
+            ));
         }
-        (None, None, Some(lt), None) => {
-            if !dur_lt(v, lt) {
-                violations.push(Violation::new(
-                    "",
-                    "duration.lt",
-                    format!("value must be less than {}", fmt_dur(lt)),
-                ));
-            }
+        (None, None, Some(lt), None) if !dur_lt(v, lt) => {
+            violations.push(Violation::new(
+                "",
+                "duration.lt",
+                format!("value must be less than {}", fmt_dur(lt)),
+            ));
         }
-        (None, None, None, Some(lte)) => {
-            if dur_gt(v, lte) {
-                violations.push(Violation::new(
-                    "",
-                    "duration.lte",
-                    format!("value must be less than or equal to {}", fmt_dur(lte)),
-                ));
-            }
+        (None, None, None, Some(lte)) if dur_gt(v, lte) => {
+            violations.push(Violation::new(
+                "",
+                "duration.lte",
+                format!("value must be less than or equal to {}", fmt_dur(lte)),
+            ));
         }
         _ => {}
     }

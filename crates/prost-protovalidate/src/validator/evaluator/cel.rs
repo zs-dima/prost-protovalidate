@@ -44,10 +44,10 @@ fn walk_expr_for_has(ided: &IdedExpr, binding: &str, paths: &mut PresencePaths) 
     match &ided.expr {
         Expr::Select(s) => {
             walk_expr_for_has(&s.operand, binding, paths);
-            if s.test
-                && let Some(path) = extract_select_path(&s.operand, &s.field, binding)
-            {
-                paths.insert(path);
+            if s.test {
+                if let Some(path) = extract_select_path(&s.operand, &s.field, binding) {
+                    paths.insert(path);
+                }
             }
         }
         Expr::Call(c) => {
@@ -720,7 +720,7 @@ pub(crate) fn compile_programs(
 
     for (idx, rule) in rules.iter().enumerate() {
         let expr = rule.expression.clone().ok_or_else(|| CompilationError {
-            cause: format!("missing CEL expression in `{path_prefix}` rule at index {idx}",),
+            cause: format!("missing CEL expression in `{path_prefix}` rule at index {idx}"),
         })?;
 
         let program = Program::compile(&expr).map_err(|e| CompilationError {

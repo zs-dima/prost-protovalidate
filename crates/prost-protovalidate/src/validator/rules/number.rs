@@ -290,41 +290,33 @@ fn check_range<T: PartialOrd + std::fmt::Display>(
                 );
             }
         }
-        (Some(gt), None, None, None) => {
-            if v <= *gt {
-                violations.push(Violation::new(
-                    "",
-                    format!("{prefix}.gt"),
-                    format!("value must be greater than {gt}"),
-                ));
-            }
+        (Some(gt), None, None, None) if v <= *gt => {
+            violations.push(Violation::new(
+                "",
+                format!("{prefix}.gt"),
+                format!("value must be greater than {gt}"),
+            ));
         }
-        (None, Some(gte), None, None) => {
-            if v < *gte {
-                violations.push(Violation::new(
-                    "",
-                    format!("{prefix}.gte"),
-                    format!("value must be greater than or equal to {gte}"),
-                ));
-            }
+        (None, Some(gte), None, None) if v < *gte => {
+            violations.push(Violation::new(
+                "",
+                format!("{prefix}.gte"),
+                format!("value must be greater than or equal to {gte}"),
+            ));
         }
-        (None, None, Some(lt), None) => {
-            if v >= *lt {
-                violations.push(Violation::new(
-                    "",
-                    format!("{prefix}.lt"),
-                    format!("value must be less than {lt}"),
-                ));
-            }
+        (None, None, Some(lt), None) if v >= *lt => {
+            violations.push(Violation::new(
+                "",
+                format!("{prefix}.lt"),
+                format!("value must be less than {lt}"),
+            ));
         }
-        (None, None, None, Some(lte)) => {
-            if v > *lte {
-                violations.push(Violation::new(
-                    "",
-                    format!("{prefix}.lte"),
-                    format!("value must be less than or equal to {lte}"),
-                ));
-            }
+        (None, None, None, Some(lte)) if v > *lte => {
+            violations.push(Violation::new(
+                "",
+                format!("{prefix}.lte"),
+                format!("value must be less than or equal to {lte}"),
+            ));
         }
         _ => {}
     }
