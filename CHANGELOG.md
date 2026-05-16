@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **BREAKING (workspace)**: bumped to `0.4.0`.
+- **BREAKING (workspace)**: bumped to `v0.4.0`.
 - Bumped `cel` 0.12 → 0.13. CEL evaluation now uses error-resilient `&&` / `||` operators (matches CEL spec semantics), overflow-safe integer math, and stricter map / string indexing (no implicit type coercion; `NoSuchOverload` returned when indexing into strings). Full conformance retained: 2854/2854 tests pass.
 - Bumped `criterion` 0.5 → 0.8.2 (dev-dependency only). The benchmark file migrated from the deprecated `criterion::black_box` to `std::hint::black_box`, and every benchmark group now carries a `Throughput::Bytes` (format validators report MiB/s of input bytes; transcode reports MiB/s of `prost::Message::encoded_len`) or `Throughput::Elements` (end-to-end and convenience report Melem/s) annotation. `bench_validate_convenience` is now `validate_convenience/bool_rules` (grouped) for consistency. The bench suite was expanded from 14 to 38 benchmarks — every public format validator (16 total) is now benched on both valid and invalid inputs, surfacing early-exit performance characteristics.
 - Removed obsolete `RUSTSEC-2024-0436` advisory ignore from `deny.toml`; `paste` is no longer a transitive dependency after the cel 0.13 upgrade (replaced upstream with `pastey`).
