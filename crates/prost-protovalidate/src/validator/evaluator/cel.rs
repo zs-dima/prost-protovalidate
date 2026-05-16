@@ -7,7 +7,7 @@ use cel::{
     Context, ExecutionError as CelExecutionError, FunctionContext, Program, Value as CelValue,
 };
 use chrono::{FixedOffset, Utc};
-use prost_reflect::{DynamicMessage, FieldDescriptor, MessageDescriptor, ReflectMessage};
+use prost_reflect::{DynamicMessage, FieldDescriptor, ReflectMessage};
 use prost_types::Timestamp;
 
 use crate::config::ValidationConfig;
@@ -633,14 +633,10 @@ fn reflect_message_to_cel(msg: &DynamicMessage) -> Result<CelValue, RuntimeError
     for field in msg.descriptor().fields() {
         let has_field = msg.has_field(&field);
 
-        let value = if has_field {
+        let value = if has_field || field.is_map() || field.is_list() {
             reflect_value_to_cel(&msg.get_field(&field))?
-        } else if let Some(message_desc) = field.kind().as_message() {
-            if field.is_map() || field.is_list() {
-                reflect_value_to_cel(&field.default_value())?
-            } else {
-                absent_message_to_cel(message_desc)?
-            }
+        } else if field.supports_presence() {
+            continue;
         } else {
             reflect_value_to_cel(&field.default_value())?
         };
@@ -736,23 +732,6 @@ fn try_unwrap_well_known_message(msg: &DynamicMessage) -> Option<CelValue> {
         }
         _ => None,
     }
-}
-
-fn absent_message_to_cel(message: &MessageDescriptor) -> Result<CelValue, RuntimeError> {
-    let mut out: HashMap<CelKey, CelValue> = HashMap::new();
-
-    for field in message.fields() {
-        let value = if field.kind().as_message().is_some() && !field.is_map() {
-            // For absent nested messages, expose a shallow object so chained
-            // selectors can read scalar defaults without infinite recursion.
-            CelValue::Map(HashMap::<CelKey, CelValue>::new().into())
-        } else {
-            reflect_value_to_cel(&field.default_value())?
-        };
-        out.insert(CelKey::String(Arc::new(field.name().to_string())), value);
-    }
-
-    Ok(CelValue::Map(out.into()))
 }
 
 fn reflect_map_key_to_cel(key: &prost_reflect::MapKey) -> CelKey {
@@ -891,6 +870,55 @@ mod tests {
             .execute(&ctx)
             .expect("execution should succeed");
         assert_eq!(bytes_prefix, CelValue::Bool(true));
+    }
+
+    #[test]
+    fn absent_presence_tracking_fields_are_absent_for_cel_has() {
+        let message =
+            DynamicMessage::new(prost_protovalidate_types::FieldRules::default().descriptor());
+        let this = reflect_message_to_cel(&message).expect("message should convert to CEL");
+        let mut ctx = build_cel_context();
+        ctx.add_variable_from_value("this", this);
+
+        let has_absent_oneof_message = Program::compile("has(this.string)")
+            .expect("program should compile")
+            .execute(&ctx)
+            .expect("execution should succeed");
+        assert_eq!(has_absent_oneof_message, CelValue::Bool(false));
+
+        let guarded_absent_oneof_message =
+            Program::compile("!has(this.string) || this.string.min_len == 1")
+                .expect("program should compile")
+                .execute(&ctx)
+                .expect("execution should short-circuit instead of reading an absent message");
+        assert_eq!(guarded_absent_oneof_message, CelValue::Bool(true));
+    }
+
+    #[test]
+    fn present_presence_tracking_fields_are_present_for_cel_has() {
+        let descriptor = prost_protovalidate_types::FieldRules::default().descriptor();
+        let string_field = descriptor
+            .get_field_by_name("string")
+            .expect("FieldRules should have string rules");
+        let string_message = DynamicMessage::new(
+            string_field
+                .kind()
+                .as_message()
+                .expect("string rules should be a message")
+                .clone(),
+        );
+        let mut message = DynamicMessage::new(descriptor);
+        message.set_field(&string_field, prost_reflect::Value::Message(string_message));
+
+        let this = reflect_message_to_cel(&message).expect("message should convert to CEL");
+        let mut ctx = build_cel_context();
+        ctx.add_variable_from_value("this", this);
+
+        let has_present_oneof_message = Program::compile("has(this.string)")
+            .expect("program should compile")
+            .execute(&ctx)
+            .expect("execution should succeed");
+        assert_eq!(has_present_oneof_message, CelValue::Bool(true));
     }
 
     #[test]
