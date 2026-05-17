@@ -1,6 +1,6 @@
 # prost-protovalidate-build
 
-Build-time code generator for zero-cost Protocol Buffer validation using [buf.validate](https://github.com/bufbuild/protovalidate) rules, built for `prost`.
+Compile-time code generator for Protocol Buffer validation using [buf.validate](https://github.com/bufbuild/protovalidate) rules, built for `prost` — direct field access at runtime, no reflection, no CEL interpreter on the hot path.
 
 Generates `impl prost_protovalidate::Validate` for messages with standard `buf.validate` field constraints. Messages containing CEL expressions are excluded at build time and fall back to runtime evaluation via `prost_protovalidate::Validator`.
 

@@ -1,8 +1,10 @@
-//! Build-time code generator for zero-cost Protocol Buffer validation.
+//! Compile-time code generator for Protocol Buffer validation.
 //!
 //! Generates `impl prost_protovalidate::Validate` for messages that have
-//! **only** standard `buf.validate` rules (no CEL expressions). Messages
-//! with any CEL rules are excluded and must use the runtime
+//! **only** standard `buf.validate` rules (no CEL expressions). Validators
+//! run through monomorphized direct field access at runtime — no
+//! `prost-reflect` transcoding, no CEL interpreter on the hot path.
+//! Messages with any CEL rules are excluded and must use the runtime
 //! `prost_protovalidate::Validator` instead.
 //!
 //! # Usage

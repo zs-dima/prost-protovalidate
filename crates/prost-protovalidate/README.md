@@ -5,9 +5,9 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.86-blue.svg)](https://blog.rust-lang.org/2025/04/03/Rust-1.86.0.html)
 
-Runtime validation for Protocol Buffer messages using [buf.validate](https://github.com/bufbuild/protovalidate) rules, built for `prost` and `prost-reflect` — with an optional **zero-cost generated path via [`prost-protovalidate-build`](https://crates.io/crates/prost-protovalidate-build)** for schemas that don't need CEL at runtime.
+Validation for Protocol Buffer messages using [buf.validate](https://github.com/bufbuild/protovalidate) rules, built for `prost` and `prost-reflect` — with an optional **compile-time validation path via [`prost-protovalidate-build`](https://crates.io/crates/prost-protovalidate-build)** for schemas without CEL.
 
-Dynamically inspects `prost-reflect` message descriptors, compiles `buf.validate` constraint annotations (including CEL expressions), and evaluates them against concrete message instances. For CEL-free schemas, `prost-protovalidate-build` emits `impl Validate` at build time so validation runs through direct field access — no reflection, no CEL interpreter on the hot path.
+By default, dynamically inspects `prost-reflect` message descriptors, compiles `buf.validate` constraint annotations (including CEL expressions), and evaluates them against concrete message instances at runtime. For schemas without CEL, `prost-protovalidate-build` generates `impl Validate` at compile time so validation runs through monomorphized direct field access — the fastest path at runtime: no reflection, no CEL interpreter on the hot path.
 
 ## Quick Start
 
@@ -57,7 +57,7 @@ validator.validate(&request)?;
 
 ## Features
 
-- **Zero-cost generated validators (no CEL on the hot path)** — companion crate [`prost-protovalidate-build`](https://crates.io/crates/prost-protovalidate-build) emits `impl Validate` at build time for messages with standard-only rules. No `prost-reflect` transcoding, no CEL interpreter, direct field access. Disable the `cel` feature to also drop `cel`, `chrono`, `paste`, and transitive `thiserror` 1.x from your dependency tree. Messages that need CEL fall back to the runtime `Validator` automatically (with a `cargo:warning=` diagnostic, never silently skipped).
+- **Compile-time validation via `prost-protovalidate-build` (fastest at runtime)** — companion crate [`prost-protovalidate-build`](https://crates.io/crates/prost-protovalidate-build) emits `impl Validate` at compile time for messages with standard-only rules. Monomorphized direct field access, no `prost-reflect` transcoding, no CEL interpreter on the hot path. Disable the `cel` feature to also drop `cel`, `chrono`, `paste`, and transitive `thiserror` 1.x from your dependency tree. Messages that need CEL fall back to the runtime `Validator` automatically (with a `cargo:warning=` diagnostic, never silently skipped).
 - **Dynamic field inspection** via `prost-reflect` descriptors — no static code generation needed for validators.
 - **CEL evaluation** — compiles and evaluates Common Expression Language expressions for cross-field and complex constraints.
 - **Aggregated violations** — collects all constraint failures instead of short-circuiting on the first error.

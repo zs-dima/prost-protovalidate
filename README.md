@@ -5,15 +5,15 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.86-blue.svg)](https://blog.rust-lang.org/2025/04/03/Rust-1.86.0.html)
 
-Runtime validation for Protocol Buffer messages using [buf.validate](https://github.com/bufbuild/protovalidate) rules, specifically built for `prost` and `prost-reflect` — with an optional **zero-cost generated path via [`prost-protovalidate-build`](crates/prost-protovalidate-build/)** for schemas that don't need CEL at runtime.
+Validation for Protocol Buffer messages using [buf.validate](https://github.com/bufbuild/protovalidate) rules, built for `prost` and `prost-reflect` — with an optional **compile-time validation path via [`prost-protovalidate-build`](crates/prost-protovalidate-build/)** for schemas without CEL.
 
-`prost-protovalidate` interprets `buf.validate` constraints (including Common Expression Language / CEL conditions) attached to protobuf messages at runtime, enabling robust input validation directly from your single source of truth—your `.proto` files. For CEL-free schemas, `prost-protovalidate-build` emits `impl Validate` at build time so validation runs through direct field access — no reflection, no CEL interpreter on the hot path.
+By default, `prost-protovalidate` evaluates `buf.validate` constraints (including Common Expression Language / CEL expressions) at runtime through `prost-reflect`, enforcing rules directly from your single source of truth — your `.proto` files. For schemas without CEL, `prost-protovalidate-build` generates `impl Validate` at compile time so validation runs through monomorphized direct field access — the fastest path at runtime: no reflection, no CEL interpreter on the hot path.
 
 ## Key Features
 
-- **Zero-cost generated validators (no CEL on the hot path)** — [`prost-protovalidate-build`](crates/prost-protovalidate-build/) emits `impl Validate` for messages with standard-only rules; no `prost-reflect` transcoding, no CEL interpreter, monomorphized direct field access. Combined with `default-features = false` on `prost-protovalidate`, the entire `cel` / `chrono` / `paste` / `thiserror` 1.x subtree drops out of your build. Messages with CEL fall back to the runtime `Validator` automatically (with a `cargo:warning=` diagnostic, never silently skipped).
+- **Compile-time validation (fastest path at runtime)** — [`prost-protovalidate-build`](crates/prost-protovalidate-build/) emits `impl Validate` for messages with standard-only rules; no `prost-reflect` transcoding, no CEL interpreter, monomorphized direct field access. Combined with `default-features = false` on `prost-protovalidate`, the entire `cel` / `chrono` / `paste` / `thiserror` 1.x subtree drops out of your build. Trades binary size and build time for hot-path speed; messages with CEL automatically fall back to the runtime `Validator` (with a `cargo:warning=` diagnostic, never silently skipped).
 - **Proto as single source of truth** — Define validation rules inside `.proto` files using `buf.validate` and enforce them automatically in Rust.
-- **Runtime validation** — Leverages `prost-reflect` to dynamically inspect message fields and evaluate complex validation rules at runtime.
+- **Runtime validation with CEL** — Leverages `prost-reflect` to dynamically inspect message fields and evaluate complex validation rules, including arbitrary CEL expressions, at runtime.
 - **CEL Evaluation** — Fully supports compiling and evaluating Common Expression Language (CEL) conditions for cross-field or complex constraints.
 - **Edition 2023 support** — Normalizes Edition 2023 descriptors (including `DELIMITED` group encoding) so `prost-reflect` 0.16 handles them correctly.
 - **Modular Crates** — Clear separation between raw protobuf types (`prost-protovalidate-types`) and the runtime validation engine (`prost-protovalidate`).
@@ -24,7 +24,7 @@ Runtime validation for Protocol Buffer messages using [buf.validate](https://git
 | -------------------------------------------------------------- | --------------------------------------------------------------- | ---------------------- |
 | [prost-protovalidate-types](crates/prost-protovalidate-types/) | `buf.validate` proto types with prost and prost-reflect support | `[dependencies]`       |
 | [prost-protovalidate](crates/prost-protovalidate/)             | Runtime validation engine (CEL parsing, constraint evaluation)  | `[dependencies]`       |
-| [prost-protovalidate-build](crates/prost-protovalidate-build/) | Build-time code generator for zero-cost validation              | `[build-dependencies]` |
+| [prost-protovalidate-build](crates/prost-protovalidate-build/) | Compile-time code generator for validation                      | `[build-dependencies]` |
 
 ## Quick Start
 
@@ -105,14 +105,15 @@ validator.validate(&request)?;
 
 Three validation modes cover different use cases:
 
-### Generated validation (zero-cost, no CEL on the hot path)
+### Compile-time validation (fastest at runtime, no CEL)
 
-For messages with **only** standard rules (no CEL). Validation runs through
-monomorphized direct field access — **no `prost-reflect` transcoding, no CEL
-interpreter, no dynamic dispatch** on the hot path. Combined with
-`default-features = false` on `prost-protovalidate`, the entire `cel` /
-`chrono` / `paste` / `thiserror` 1.x subtree drops out of your build.
-Requires `prost-protovalidate-build` in `[build-dependencies]`.
+For messages with **only** standard rules (no CEL). Validators are generated
+at compile time and run through monomorphized direct field access — **no
+`prost-reflect` transcoding, no CEL interpreter, no dynamic dispatch** on
+the hot path. Combined with `default-features = false` on
+`prost-protovalidate`, the entire `cel` / `chrono` / `paste` / `thiserror`
+1.x subtree drops out of your build. Requires `prost-protovalidate-build` in
+`[build-dependencies]`.
 
 ```rust
 use prost_protovalidate::Validate;
@@ -132,11 +133,11 @@ let validator = Validator::new();
 validator.validate(&msg)?;
 ```
 
-### Runtime without CEL (lightweight)
+### Runtime validation without CEL (lightweight)
 
 For services that don't use CEL. Disabling the `cel` feature removes `cel`,
 `chrono`, `paste`, and transitive `thiserror` 1.x deps. Pairs naturally with
-generated validators above for a CEL-free dependency tree end to end.
+compile-time validators above for a CEL-free dependency tree end to end.
 
 ```toml
 [dependencies]
@@ -148,13 +149,13 @@ Standard rules work normally; messages with CEL rules produce a
 
 ### Which mode for which message
 
-| Proto rules                               | `Validate` trait generated? | How to validate                      |
-| ----------------------------------------- | --------------------------- | ------------------------------------ |
-| Standard only (min_len, gte, email, etc.) | Yes                         | `msg.validate()` (generated, fast)   |
-| CEL only (expressions)                    | No                          | `validator.validate(&msg)` (runtime) |
-| Mixed (standard + CEL)                    | No                          | `validator.validate(&msg)` (runtime) |
-| Nested runtime-only dependencies          | No                          | `validator.validate(&msg)` (runtime) |
-| No rules                                  | No                          | —                                    |
+| Proto rules                               | `Validate` trait generated? | How to validate                          |
+| ----------------------------------------- | --------------------------- | ---------------------------------------- |
+| Standard only (min_len, gte, email, etc.) | Yes                         | `msg.validate()` (compile-time, fastest) |
+| CEL only (expressions)                    | No                          | `validator.validate(&msg)` (runtime)     |
+| Mixed (standard + CEL)                    | No                          | `validator.validate(&msg)` (runtime)     |
+| Nested runtime-only dependencies          | No                          | `validator.validate(&msg)` (runtime)     |
+| No rules                                  | No                          | —                                        |
 
 ## Build-Time Code Generation
 

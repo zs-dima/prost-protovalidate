@@ -79,10 +79,12 @@ pub use error::{CompilationError, Error, RuntimeError, ValidationError};
 pub use validator::{Validator, validate};
 pub use violation::Violation;
 
-/// Zero-cost validation for Protocol Buffer messages with generated validators.
+/// Compile-time validation for Protocol Buffer messages with generated validators.
 ///
 /// This trait is implemented by `prost-protovalidate-build` for messages that
-/// have **only** standard `buf.validate` rules (no CEL expressions). For
+/// have **only** standard `buf.validate` rules (no CEL expressions). Validators
+/// run through monomorphized direct field access at runtime — no
+/// `prost-reflect` transcoding, no CEL interpreter on the hot path. For
 /// messages using CEL expressions or a mix of standard + CEL rules, use the
 /// runtime [`Validator`] instead.
 ///
