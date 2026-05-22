@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-22
+
 ### Added
 
 - **`prost-protovalidate-build` — compile-time validators for messages with standard-only rules.** New build-time code generator that emits `impl prost_protovalidate::Validate` for messages whose `buf.validate` rules are all standard, evaluated through monomorphized direct field access at runtime — no `prost-reflect` transcoding, no CEL interpreter on the hot path. Combined with `default-features = false` on `prost-protovalidate`, the entire `cel` / `chrono` / `paste` / `thiserror` 1.x subtree drops out of consumer builds. Messages with any CEL rule, predefined CEL rule, time-relative timestamp rule (`lt_now` / `gt_now` / `within`), invalid regex, `repeated.unique` on non-hashable elements, real-oneof field with direct field rules, WKT-wrappers inside repeated/maps, or a nested runtime-only dependency are routed to the runtime `Validator` with a `cargo:warning=` diagnostic — never silently skipped. The capability analyzer also rejects rule-type / field-kind mismatches (e.g. `string` rules on an `int32` field) with the runtime's wording, so codegen never emits Rust that fails to compile.
