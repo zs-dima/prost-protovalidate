@@ -22,7 +22,7 @@ prost-types = { workspace = true }
 # of the workspace dep's default features and toggle `cel` per its own feature
 # flag. Cargo forbids overriding `default-features` through workspace
 # inheritance, hence the path/version pin duplicated here.
-prost-protovalidate = { path = "../prost-protovalidate", version = "=0.4.1", default-features = false }
+prost-protovalidate = { path = "../prost-protovalidate", version = "=0.4.2", default-features = false }
 prost-protovalidate-types = { workspace = true }
 
 [build-dependencies]

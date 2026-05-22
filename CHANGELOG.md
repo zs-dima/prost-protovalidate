@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-22
+
+### Fixed
+
+- **docs.rs build.** Removed a stray `#[cfg_attr(docsrs, doc(cfg(feature = "cel")))]` on a `pub(crate)` module in `validator/evaluator/mod.rs`. The attribute required the unstable `feature(doc_cfg)` (gated under the `docsrs` cfg that docs.rs sets via `rustdoc-args = ["--cfg", "docsrs"]`) and rendered no visible docs anyway — rustdoc only emits feature-gate badges for `pub` items. The 0.4.1 release builds locally but fails on docs.rs.
+
 ## [0.4.1] - 2026-05-22
 
 ### Added
