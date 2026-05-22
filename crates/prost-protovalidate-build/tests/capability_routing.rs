@@ -337,10 +337,12 @@ message ExternedThing {
 }
 
 #[test]
-fn repeated_unique_on_floats_routed_to_runtime() -> Result<(), Box<dyn std::error::Error>> {
-    // `repeated.unique` on `float`/`double`/message elements can't be
-    // implemented with a plain HashSet (no `Eq`/`Hash`). Codegen must
-    // route such messages to runtime, which uses canonical-bits encoding.
+fn repeated_unique_on_floats_emits_canonical_bits_codegen() -> Result<(), Box<dyn std::error::Error>>
+{
+    // `repeated.unique` on `float` and `double` now codegens directly,
+    // using `HashSet<u32>` / `HashSet<u64>` over the canonical IEEE-754
+    // bit pattern (NaN skipped, ±0.0 collapsed). Matches the runtime's
+    // `canonical_f32_bits` / `canonical_f64_bits` semantics.
     let generated = generate_from_proto(
         "unique_floats.proto",
         r#"syntax = "proto3";
@@ -354,8 +356,16 @@ message HasUniqueFloats {
     )?;
 
     assert!(
-        !generated.contains("impl ::prost_protovalidate::Validate for uniqfloat::HasUniqueFloats"),
-        "repeated.unique on floats must route to runtime.\n\nGenerated:\n{generated}",
+        generated.contains("impl ::prost_protovalidate::Validate for uniqfloat::HasUniqueFloats"),
+        "repeated.unique on floats must now codegen.\n\nGenerated:\n{generated}",
+    );
+    assert!(
+        generated.contains("HashSet :: < u32 >") || generated.contains("HashSet::<u32>"),
+        "expected canonical-bits HashSet<u32> in generated code.\n\nGenerated:\n{generated}",
+    );
+    assert!(
+        generated.contains("to_bits"),
+        "expected canonical-bits `to_bits()` call.\n\nGenerated:\n{generated}",
     );
 
     Ok(())

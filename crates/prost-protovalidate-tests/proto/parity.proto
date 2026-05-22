@@ -199,6 +199,26 @@ message RepeatedScalarItems {
   repeated bytes  payloads = 2 [(buf.validate.field).repeated.items.bytes.pattern = "^[A-Z]+$"];
 }
 
+// `repeated.unique` on float/double — exercises the canonical-bits codegen
+// path. Both engines must report exactly the same violations:
+// - duplicates by value (`[1.0, 1.0]`) violate.
+// - `+0.0` and `-0.0` violate (same canonical bits).
+// - multiple `NaN` values are allowed (IEEE-754: `NaN != NaN`).
+message RepeatedFloatUnique {
+  repeated float  floats  = 1 [(buf.validate.field).repeated.unique = true];
+  repeated double doubles = 2 [(buf.validate.field).repeated.unique = true];
+}
+
+// Time-relative timestamp rules (`lt_now`, `gt_now`, `within`) — both
+// engines call `SystemTime::now()` once per validation; the parity test
+// uses values fixed deep in the past / future so the wall-clock reading
+// doesn't determine the violation set.
+message TimestampRelative {
+  google.protobuf.Timestamp must_be_past   = 1 [(buf.validate.field).timestamp.lt_now = true];
+  google.protobuf.Timestamp must_be_future = 2 [(buf.validate.field).timestamp.gt_now = true];
+  google.protobuf.Timestamp within_minute  = 3 [(buf.validate.field).timestamp.within = { seconds: 60 }];
+}
+
 // Virtual oneof (`MessageRules.oneof`) happy path. Real-oneof routing is
 // already covered by the capability tests — this exercises the
 // "exactly-one-of N regular fields" code path on both validation engines.

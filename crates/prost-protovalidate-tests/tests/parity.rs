@@ -7,8 +7,8 @@ use prost_protovalidate_tests::parity::{
     self, AllNumericTypes, BytesContainsEmpty, BytesPatternRaw, BytesRuleMatrix, ConstInTest,
     DurationTimestampRules, EnumDefinedOnlyContainers, FieldMaskTest, FloatFiniteRules, Inner,
     KeywordFields, MapKeyRules, MapScalarValues, MapStringInner, NestedIgnore, OptionalScalars,
-    ParityTest, PresenceMix, RepeatedScalarItems, RequiredImplicitScalar, StringRuleMatrix,
-    StringWellKnown, VirtualOneof, VirtualOneofImplicitIgnore,
+    ParityTest, PresenceMix, RepeatedFloatUnique, RepeatedScalarItems, RequiredImplicitScalar,
+    StringRuleMatrix, StringWellKnown, TimestampRelative, VirtualOneof, VirtualOneofImplicitIgnore,
 };
 use prost_reflect::{DescriptorPool, DynamicMessage};
 
@@ -314,6 +314,200 @@ fn field_mask_not_in_subpath_violation() {
         ..valid_field_mask_test()
     };
     assert_violations_match(&msg, "parity.FieldMaskTest");
+}
+
+#[test]
+fn field_mask_in_rejects_partial_segment_prefix() {
+    // Allowed entries: ["x", "y", "z.a"]. A path that *starts with* an
+    // allowed entry but does NOT end at a path-segment boundary must be
+    // rejected — the coverage check is on segment boundaries (a literal
+    // `.`), not on raw string prefixes. Without the boundary check, the
+    // old `format!("{prefix}.")` and the new allocation-free
+    // `fieldmask_covers` would both have to reject this case.
+    let msg = FieldMaskTest {
+        allowed_mask: Some(prost_types::FieldMask {
+            // "xy" starts with allowed "x" but the next char is `y`, not `.`.
+            paths: vec!["xy".to_string()],
+        }),
+        ..valid_field_mask_test()
+    };
+    assert_violations_match(&msg, "parity.FieldMaskTest");
+}
+
+#[test]
+fn field_mask_in_rejects_partial_multisegment_prefix() {
+    // Allowed entries include "z.a". "z.ab" shares the literal `z.a`
+    // prefix but the next char is `b`, not `.`.
+    let msg = FieldMaskTest {
+        allowed_mask: Some(prost_types::FieldMask {
+            paths: vec!["z.ab".to_string()],
+        }),
+        ..valid_field_mask_test()
+    };
+    assert_violations_match(&msg, "parity.FieldMaskTest");
+}
+
+#[test]
+fn field_mask_not_in_allows_partial_segment_prefix() {
+    // Blocked entries: ["secret", "internal"]. "secrets" starts with
+    // "secret" but the next char is `s`, not `.` — so it must NOT be
+    // treated as a sub-path of `secret` and must be allowed through.
+    let msg = FieldMaskTest {
+        blocked_mask: Some(prost_types::FieldMask {
+            paths: vec!["secrets".to_string()],
+        }),
+        ..valid_field_mask_test()
+    };
+    assert_both_ok(&msg, "parity.FieldMaskTest");
+}
+
+// --- RepeatedFloatUnique: canonical-bits codegen path for float/double ---
+
+#[test]
+fn repeated_float_unique_empty_and_distinct_pass() {
+    let msg = RepeatedFloatUnique {
+        floats: vec![1.0, 2.0, 3.5],
+        doubles: vec![1.0, 2.0, 3.5],
+    };
+    assert_both_ok(&msg, "parity.RepeatedFloatUnique");
+}
+
+#[test]
+fn repeated_float_unique_duplicate_values_violate() {
+    let msg = RepeatedFloatUnique {
+        floats: vec![1.0, 2.0, 1.0],
+        doubles: vec![3.5, 3.5],
+    };
+    assert_violations_match(&msg, "parity.RepeatedFloatUnique");
+}
+
+#[test]
+fn repeated_float_unique_positive_and_negative_zero_collide() {
+    // +0.0 and -0.0 share canonical bits → must violate uniqueness on both
+    // engines.
+    let msg = RepeatedFloatUnique {
+        floats: vec![0.0_f32, -0.0_f32],
+        doubles: vec![0.0_f64, -0.0_f64],
+    };
+    assert_violations_match(&msg, "parity.RepeatedFloatUnique");
+}
+
+#[test]
+fn repeated_float_unique_multiple_nans_are_allowed() {
+    // IEEE-754: NaN != NaN. Both engines treat each NaN as never-seen, so
+    // multiple NaNs do NOT violate the unique constraint.
+    let msg = RepeatedFloatUnique {
+        floats: vec![f32::NAN, f32::NAN, 1.0, f32::NAN],
+        doubles: vec![f64::NAN, f64::NAN, 1.0],
+    };
+    assert_both_ok(&msg, "parity.RepeatedFloatUnique");
+}
+
+// --- TimestampRelative: lt_now / gt_now / within (1d codegen) ---
+//
+// Both engines call `SystemTime::now()` at validation time. To make the
+// expected outcome deterministic we use timestamps far enough from "now"
+// that wall-clock skew between the two paths' clock reads can't flip the
+// result: deep past (year ~2001) for must_be_past + within_minute, and
+// far future (year ~33658) for must_be_future. The within_minute check
+// also uses a far-past value, so its `|ts - now| > 60s` outcome is
+// stable.
+
+const PAST_SECONDS: i64 = 1_000_000_000; // 2001-09-09 — comfortably past
+const FUTURE_SECONDS: i64 = 1_000_000_000_000; // year ~33658 — comfortably future
+
+fn ts(secs: i64) -> prost_types::Timestamp {
+    prost_types::Timestamp {
+        seconds: secs,
+        nanos: 0,
+    }
+}
+
+#[test]
+fn timestamp_relative_all_satisfied_passes() {
+    let msg = TimestampRelative {
+        must_be_past: Some(ts(PAST_SECONDS)),
+        must_be_future: Some(ts(FUTURE_SECONDS)),
+        within_minute: None, // optional; skipping makes the within check inapplicable
+    };
+    assert_both_ok(&msg, "parity.TimestampRelative");
+}
+
+#[test]
+fn timestamp_relative_future_value_violates_lt_now() {
+    let msg = TimestampRelative {
+        must_be_past: Some(ts(FUTURE_SECONDS)), // wrongly in the future
+        must_be_future: Some(ts(FUTURE_SECONDS)),
+        within_minute: None,
+    };
+    assert_violations_match(&msg, "parity.TimestampRelative");
+}
+
+#[test]
+fn timestamp_relative_past_value_violates_gt_now() {
+    let msg = TimestampRelative {
+        must_be_past: Some(ts(PAST_SECONDS)),
+        must_be_future: Some(ts(PAST_SECONDS)), // wrongly in the past
+        within_minute: None,
+    };
+    assert_violations_match(&msg, "parity.TimestampRelative");
+}
+
+#[test]
+fn timestamp_relative_far_past_violates_within_minute() {
+    let msg = TimestampRelative {
+        must_be_past: Some(ts(PAST_SECONDS)),
+        must_be_future: Some(ts(FUTURE_SECONDS)),
+        within_minute: Some(ts(PAST_SECONDS)), // |now - PAST| >> 60s
+    };
+    assert_violations_match(&msg, "parity.TimestampRelative");
+}
+
+#[test]
+fn timestamp_relative_all_fields_unset_passes() {
+    // None for all timestamp fields. The codegen wraps every check in
+    // `if let Some(ref _ts) = self.#field_ident`, so an unset field must
+    // skip validation entirely — same as the runtime which only validates
+    // present fields. Confirms both engines short-circuit identically.
+    let msg = TimestampRelative {
+        must_be_past: None,
+        must_be_future: None,
+        within_minute: None,
+    };
+    assert_both_ok(&msg, "parity.TimestampRelative");
+}
+
+#[test]
+fn timestamp_relative_multiple_violations_collected_identically() {
+    // Three rules, all violated by the same message. Both engines must
+    // accumulate the same three violations in the same order:
+    //   - must_be_past in the future (lt_now)
+    //   - must_be_future in the past (gt_now)
+    //   - within_minute deep in the past (within)
+    let msg = TimestampRelative {
+        must_be_past: Some(ts(FUTURE_SECONDS)),
+        must_be_future: Some(ts(PAST_SECONDS)),
+        within_minute: Some(ts(PAST_SECONDS)),
+    };
+    assert_violations_match(&msg, "parity.TimestampRelative");
+}
+
+#[test]
+fn timestamp_relative_within_close_to_now_passes() {
+    // A timestamp constructed from `now_systemtime()` reads the wall clock
+    // at message-construction time; both engines read their own clock at
+    // validation time. The diff `|construct - validate|` is microseconds,
+    // well within the 60-second window — both engines must pass. This
+    // exercises the `within` predicate's happy path (without a fragile
+    // exact-boundary test that's not portable across two separate clock
+    // reads).
+    let now_ish = prost_protovalidate::time::now_systemtime();
+    let msg = TimestampRelative {
+        must_be_past: Some(ts(PAST_SECONDS)),
+        must_be_future: Some(ts(FUTURE_SECONDS)),
+        within_minute: Some(now_ish),
+    };
+    assert_both_ok(&msg, "parity.TimestampRelative");
 }
 
 // --- OptionalScalars: proto3 `optional` + IGNORE_IF_ZERO_VALUE (covers A.1) ---

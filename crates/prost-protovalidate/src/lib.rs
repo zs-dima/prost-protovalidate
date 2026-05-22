@@ -32,9 +32,11 @@
 //!
 //! # Feature flags
 //!
-//! | Feature | Default | Description |
-//! |---------|---------|-------------|
-//! | `cel`   | Yes     | CEL expression evaluation and `chrono` time support. Disable for a lighter dependency footprint when only standard rules are used. |
+//! | Feature       | Default | Description |
+//! |---------------|---------|-------------|
+//! | `cel`         | Yes     | CEL expression evaluation and `chrono` time support. Disable for a lighter dependency footprint when only standard rules are used. |
+//! | `tonic`       | No      | Adds [`tonic`](https://docs.rs/tonic) integration: [`From<ValidationError> for tonic::Status`] and a [`ValidateRequest`](tonic::ValidateRequest) extension trait so gRPC handlers can call `req.validate_inner()?`. |
+//! | `tonic-types` | No      | Implies `tonic`. Attaches a `google.rpc.BadRequest` detail with one `FieldViolation` per [`Violation`] to validation-failure statuses. |
 //!
 //! Without the `cel` feature, any message or field annotated with CEL
 //! expressions (via both `cel` and legacy `cel_expression`, including
@@ -61,6 +63,9 @@
 
 mod config;
 mod error;
+pub mod time;
+#[cfg(feature = "tonic")]
+pub mod tonic;
 mod validator;
 pub mod validators;
 mod violation;

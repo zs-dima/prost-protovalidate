@@ -100,6 +100,53 @@ fn walk_expr_for_has(ided: &IdedExpr, binding: &str, paths: &mut PresencePaths) 
     }
 }
 
+/// Returns `true` if the compiled CEL program's AST contains any bare
+/// identifier matching `name` (e.g. `now`, `this`). Used to skip context
+/// bindings the program never references so we don't pay their cost
+/// per-evaluation. Conservative: any structural match counts, even if the
+/// expression containing the identifier is unreachable at runtime.
+pub(crate) fn program_references_ident(program: &Program, name: &str) -> bool {
+    expr_references_ident(program.expression(), name)
+}
+
+fn expr_references_ident(ided: &IdedExpr, name: &str) -> bool {
+    match &ided.expr {
+        Expr::Ident(n) => n == name,
+        Expr::Select(s) => expr_references_ident(&s.operand, name),
+        Expr::Call(c) => {
+            c.target
+                .as_ref()
+                .is_some_and(|t| expr_references_ident(t, name))
+                || c.args.iter().any(|a| expr_references_ident(a, name))
+        }
+        Expr::Comprehension(c) => {
+            // The comprehension's iteration variable can shadow `name`. To
+            // keep the analysis simple and conservative, we still descend
+            // into all subexpressions and flag a match — false positives
+            // only cost a cheap binding, not correctness.
+            expr_references_ident(&c.iter_range, name)
+                || expr_references_ident(&c.accu_init, name)
+                || expr_references_ident(&c.loop_cond, name)
+                || expr_references_ident(&c.loop_step, name)
+                || expr_references_ident(&c.result, name)
+        }
+        Expr::List(l) => l.elements.iter().any(|e| expr_references_ident(e, name)),
+        Expr::Map(m) => m.entries.iter().any(|entry| match &entry.expr {
+            EntryExpr::MapEntry(me) => {
+                expr_references_ident(&me.key, name) || expr_references_ident(&me.value, name)
+            }
+            EntryExpr::StructField(sf) => expr_references_ident(&sf.value, name),
+        }),
+        Expr::Struct(s) => s.entries.iter().any(|entry| match &entry.expr {
+            EntryExpr::MapEntry(me) => {
+                expr_references_ident(&me.key, name) || expr_references_ident(&me.value, name)
+            }
+            EntryExpr::StructField(sf) => expr_references_ident(&sf.value, name),
+        }),
+        Expr::Unspecified | Expr::Literal(_) => false,
+    }
+}
+
 /// Climbs a chain of non-test `Select`s starting at `operand` until it hits
 /// an `Ident` matching `target_binding`, building the dotted path from root to
 /// `leaf`. Returns `None` for any other shape (comprehension iterators,
@@ -161,6 +208,11 @@ pub(crate) struct CelRuleProgram {
     pub rules_presence_paths: PresencePaths,
     /// Dotted paths reached by `has(rule. ...)` in this program's AST.
     pub rule_presence_paths: PresencePaths,
+    /// `true` if the program references the `now` identifier anywhere in its
+    /// AST. When `false`, evaluation skips the `cfg.now_fn()` call and the
+    /// associated CEL context binding — saving one `SystemTime::now()`
+    /// syscall per evaluation under the default configuration.
+    pub references_now: bool,
 }
 
 impl CelRuleProgram {
@@ -190,11 +242,13 @@ impl CelRuleProgram {
         let mut ctx = build_cel_context();
         ctx.add_variable_from_value("this", this);
 
-        let now = (cfg.now_fn)();
-        ctx.add_variable("now", timestamp_to_cel(&now)?)
-            .map_err(|e| RuntimeError {
-                cause: format!("failed to bind CEL variable `now`: {e}"),
-            })?;
+        if self.references_now {
+            let now = (cfg.now_fn)();
+            ctx.add_variable("now", timestamp_to_cel(&now)?)
+                .map_err(|e| RuntimeError {
+                    cause: format!("failed to bind CEL variable `now`: {e}"),
+                })?;
+        }
         if let Some(rule_value) = &self.rule_value {
             let rule_cel = reflect_value_to_cel(rule_value, &self.rule_presence_paths, &[])?;
             ctx.add_variable_from_value("rule", rule_cel);
@@ -702,6 +756,7 @@ pub(crate) fn compile_programs(
         let this_presence_paths = collect_has_paths(&program, "this");
         let rules_presence_paths = collect_has_paths(&program, "rules");
         let rule_presence_paths = collect_has_paths(&program, "rule");
+        let references_now = program_references_ident(&program, "now");
         out.push(CelRuleProgram {
             rule_id: expr.clone(),
             message: None,
@@ -715,6 +770,7 @@ pub(crate) fn compile_programs(
             this_presence_paths,
             rules_presence_paths,
             rule_presence_paths,
+            references_now,
         });
     }
 
@@ -729,6 +785,7 @@ pub(crate) fn compile_programs(
         let this_presence_paths = collect_has_paths(&program, "this");
         let rules_presence_paths = collect_has_paths(&program, "rules");
         let rule_presence_paths = collect_has_paths(&program, "rule");
+        let references_now = program_references_ident(&program, "now");
 
         out.push(CelRuleProgram {
             rule_id: rule.id.clone().unwrap_or_else(|| expr.clone()),
@@ -743,6 +800,7 @@ pub(crate) fn compile_programs(
             this_presence_paths,
             rules_presence_paths,
             rule_presence_paths,
+            references_now,
         });
     }
 
@@ -971,6 +1029,82 @@ mod tests {
     }
 
     #[test]
+    fn program_references_ident_detects_now_only_when_used() {
+        let with_now = Program::compile("now > timestamp('2020-01-01T00:00:00Z')")
+            .expect("`now > timestamp(...)` must compile");
+        assert!(program_references_ident(&with_now, "now"));
+
+        let without_now =
+            Program::compile("this.value > 0").expect("`this.value > 0` must compile");
+        assert!(!program_references_ident(&without_now, "now"));
+
+        // `now` referenced from inside a nested call/comprehension is still detected.
+        let nested =
+            Program::compile("[1, 2, 3].all(x, x > 0) && now > timestamp('2020-01-01T00:00:00Z')")
+                .expect("compound `all() && now > …` must compile");
+        assert!(program_references_ident(&nested, "now"));
+    }
+
+    #[test]
+    fn program_references_ident_detects_now_inside_has_select() {
+        // CEL's `has(x.field)` parses as `Select { test: true, operand: x,
+        // field }`. The walker must descend into the `Select` operand and
+        // flag the `Ident("now")` there. (Bare `has(now)` is rejected by
+        // the CEL parser as an invalid `has()` argument — the macro
+        // requires a field-select expression.)
+        let program = Program::compile("has(this.x) && now > timestamp('2020-01-01T00:00:00Z')")
+            .expect("`has(this.x) && now > …` must compile");
+        assert!(program_references_ident(&program, "now"));
+    }
+
+    #[test]
+    fn program_references_ident_detects_now_as_select_operand() {
+        // `now.getSeconds()` reaches `now` via `Select` (or method-call
+        // sugar). The walker's `Select` arm descends into the operand.
+        let program =
+            Program::compile("now.getSeconds() > 0").expect("`now.getSeconds()` must compile");
+        assert!(program_references_ident(&program, "now"));
+    }
+
+    #[test]
+    fn program_references_ident_walks_into_struct_and_map_literals() {
+        // `Map` literal: `{'k': now}`. The walker's `Map` arm descends
+        // into entry values.
+        let in_map = Program::compile("{'k': now}.size() > 0")
+            .expect("map literal containing `now` must compile");
+        assert!(program_references_ident(&in_map, "now"));
+
+        // `Map` literal that does NOT contain `now` — confirms the walker
+        // doesn't over-flag.
+        let no_now = Program::compile("{'k': this.value}.size() > 0")
+            .expect("map literal without `now` must compile");
+        assert!(!program_references_ident(&no_now, "now"));
+    }
+
+    #[test]
+    fn program_references_ident_conservative_on_comprehension_shadowing() {
+        // CEL allows arbitrary iteration-variable names. `[1, 2].all(now, …)`
+        // shadows the global `now` binding inside the body, so a fully-precise
+        // walker could return `false`. Our walker is conservative: it still
+        // descends into the body and returns `true`. False positives only
+        // cost a cheap context binding, not correctness — and the test pins
+        // the behaviour so a future "smarter" walker can't accidentally
+        // regress us into a missed-real-reference state.
+        let shadowed = Program::compile("[1, 2].all(now, now > 0)")
+            .expect("comprehension with `now` as iter-var must compile");
+        assert!(program_references_ident(&shadowed, "now"));
+    }
+
+    #[test]
+    fn program_references_ident_handles_multiple_occurrences() {
+        let twice = Program::compile(
+            "now > timestamp('2020-01-01T00:00:00Z') && now < timestamp('2030-01-01T00:00:00Z')",
+        )
+        .expect("compound `now > … && now < …` must compile");
+        assert!(program_references_ident(&twice, "now"));
+    }
+
+    #[test]
     fn reflect_value_to_cel_passes_through_non_finite_floats() {
         let nan = reflect_value_to_cel(&prost_reflect::Value::F32(f32::NAN), &no_presence(), &[])
             .expect("NaN should convert to CEL value");
@@ -1148,6 +1282,7 @@ mod tests {
             this_presence_paths: no_presence(),
             rules_presence_paths: no_presence(),
             rule_presence_paths: no_presence(),
+            references_now: false,
         };
         let string_program = CelRuleProgram {
             rule_id: "bar".to_string(),
@@ -1162,6 +1297,7 @@ mod tests {
             this_presence_paths: no_presence(),
             rules_presence_paths: no_presence(),
             rule_presence_paths: no_presence(),
+            references_now: false,
         };
 
         let bool_violation = bool_program
@@ -1191,6 +1327,7 @@ mod tests {
             this_presence_paths: no_presence(),
             rules_presence_paths: no_presence(),
             rule_presence_paths: no_presence(),
+            references_now: false,
         };
         assert!(matches!(
             invalid_type_program.evaluate_value_with_this(&prost_reflect::Value::Bool(false), &cfg),

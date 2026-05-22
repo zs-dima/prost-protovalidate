@@ -38,9 +38,11 @@ prost-protovalidate = "0.4"
 
 ### Feature Flags
 
-| Feature | Default | Description                                         |
-| ------- | ------- | --------------------------------------------------- |
-| `cel`   | Yes     | CEL expression evaluation and `chrono` time support |
+| Feature       | Default | Description                                                                                                                                                            |
+| ------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cel`         | Yes     | CEL expression evaluation and `chrono` time support                                                                                                                    |
+| `tonic`       | No      | gRPC integration: `From<ValidationError> for tonic::Status` and a `ValidateRequest` extension trait (`req.validate_inner()?` in handlers)                              |
+| `tonic-types` | No      | Implies `tonic`. Attaches `google.rpc.BadRequest` details to validation-failure statuses so clients can parse field-level errors without scraping the message string   |
 
 To disable CEL for a lighter dependency footprint (removes `cel`, `chrono`,
 `paste`, and `thiserror` 1.x transitive deps):
@@ -149,13 +151,70 @@ Standard rules work normally; messages with CEL rules produce a
 
 ### Which mode for which message
 
-| Proto rules                               | `Validate` trait generated? | How to validate                          |
-| ----------------------------------------- | --------------------------- | ---------------------------------------- |
-| Standard only (min_len, gte, email, etc.) | Yes                         | `msg.validate()` (compile-time, fastest) |
-| CEL only (expressions)                    | No                          | `validator.validate(&msg)` (runtime)     |
-| Mixed (standard + CEL)                    | No                          | `validator.validate(&msg)` (runtime)     |
-| Nested runtime-only dependencies          | No                          | `validator.validate(&msg)` (runtime)     |
-| No rules                                  | No                          | —                                        |
+| Proto rules                                    | `Validate` trait generated? | How to validate                          |
+| ---------------------------------------------- | --------------------------- | ---------------------------------------- |
+| Standard only (min_len, gte, email, etc.)      | Yes                         | `msg.validate()` (compile-time, fastest) |
+| Time-relative timestamp (lt_now, gt_now, within)| Yes (reads `SystemTime::now()`) | `msg.validate()` (compile-time, fastest) |
+| `repeated.unique` on float/double              | Yes (canonical IEEE-754 bits) | `msg.validate()` (compile-time, fastest) |
+| CEL only (expressions)                         | No                          | `validator.validate(&msg)` (runtime)     |
+| Mixed (standard + CEL)                         | No                          | `validator.validate(&msg)` (runtime)     |
+| Nested runtime-only dependencies               | No                          | `validator.validate(&msg)` (runtime)     |
+| No rules                                       | No                          | —                                        |
+
+For messages with time-relative timestamp rules, the generated
+`Validate::validate(&self)` impl reads `SystemTime::now()` once per call —
+identical to the runtime `Validator`'s default behaviour. Tests that need
+a deterministic clock must use the runtime `Validator` and override
+`now_fn` on `ValidatorOptions`; the trait signature has no place to inject
+a clock source.
+
+### gRPC integration (tonic)
+
+Enable the `tonic` feature to map validation errors to gRPC statuses:
+
+```toml
+[dependencies]
+prost-protovalidate = { version = "0.4", features = ["tonic"] }
+tonic = "0.14"
+```
+
+In your service handler:
+
+```rust,ignore
+use prost_protovalidate::tonic::ValidateRequest;
+
+#[tonic::async_trait]
+impl my_proto::greeter_server::Greeter for GreeterImpl {
+    async fn say_hello(
+        &self,
+        req: tonic::Request<my_proto::HelloRequest>,
+    ) -> Result<tonic::Response<my_proto::HelloReply>, tonic::Status> {
+        req.validate_inner()?;
+        // ... handler body ...
+    }
+}
+```
+
+`ValidateRequest` is implemented for unary and server-streaming handlers
+(`tonic::Request<T>`). For client-streaming and bidirectional handlers
+(`tonic::Request<tonic::Streaming<T>>`), validate each message inside the
+per-message loop: `msg.validate().map_err(tonic::Status::from)?`.
+
+`ValidationError` maps to `Code::InvalidArgument`. `CompilationError` /
+`RuntimeError` (and the unified `Error::Compilation` / `Error::Runtime`
+variants) map to `Code::Internal` with a **fixed, generic message** — the
+underlying `cause` strings can contain proto field names and CEL internals
+that should not be exposed to untrusted clients. Log the original error
+server-side before converting if you need the full cause.
+
+Enabling the additional `tonic-types` feature attaches a `google.rpc.BadRequest`
+detail to validation-failure statuses, with one `FieldViolation` per
+violation, so clients can parse field-level errors programmatically:
+
+```toml
+[dependencies]
+prost-protovalidate = { version = "0.4", features = ["tonic-types"] }
+```
 
 ## Build-Time Code Generation
 

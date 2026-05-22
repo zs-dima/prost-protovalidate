@@ -82,20 +82,10 @@ pub(crate) struct ValidationConfig {
 /// Default timestamp factory using `SystemTime::now()`.
 ///
 /// Shared by `ValidationConfig::default()` and `Validator::with_options()`.
+/// Delegates to [`crate::time::now_systemtime`] so the runtime default and
+/// the compile-time `Validate` path read time through the same code path.
 pub(crate) fn default_now_fn() -> Arc<dyn Fn() -> Timestamp + Send + Sync> {
-    Arc::new(|| {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        // Both casts are semantically safe:
-        // - as_secs() since UNIX_EPOCH fits in i64 for billions of years
-        // - subsec_nanos() is always < 1_000_000_000 which fits in i32
-        #[allow(clippy::cast_possible_wrap)]
-        Timestamp {
-            seconds: now.as_secs() as i64,
-            nanos: now.subsec_nanos() as i32,
-        }
-    })
+    Arc::new(crate::time::now_systemtime)
 }
 
 impl Default for ValidationConfig {

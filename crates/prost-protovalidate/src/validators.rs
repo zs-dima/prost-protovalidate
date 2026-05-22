@@ -143,3 +143,57 @@ pub fn is_http_header_value(s: &str, strict: bool) -> bool {
         internal::is_valid_http_header_value_loose(s)
     }
 }
+
+/// Returns `true` if `path` is covered by `candidate` under `FieldMask`
+/// path-coverage semantics — either `path` equals `candidate`, or
+/// `candidate` is a prefix of `path` at a path-segment boundary
+/// (i.e. `path == "{candidate}.{rest}"`).
+///
+/// Allocation-free; used by both the runtime evaluator and generated
+/// `field_mask.in` / `field_mask.not_in` checks.
+#[inline]
+#[must_use]
+pub fn fieldmask_covers(candidate: &str, path: &str) -> bool {
+    path == candidate
+        || (path.len() > candidate.len()
+            && path.starts_with(candidate)
+            && path.as_bytes()[candidate.len()] == b'.')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fieldmask_covers;
+
+    #[test]
+    fn fieldmask_covers_exact() {
+        assert!(fieldmask_covers("user.email", "user.email"));
+    }
+
+    #[test]
+    fn fieldmask_covers_subpath() {
+        assert!(fieldmask_covers("user", "user.email"));
+        assert!(fieldmask_covers("user.profile", "user.profile.name"));
+    }
+
+    #[test]
+    fn fieldmask_covers_rejects_partial_segment() {
+        // "user" does not cover "username" — the boundary character is `e`, not `.`.
+        assert!(!fieldmask_covers("user", "username"));
+        // Likewise for deeper segments.
+        assert!(!fieldmask_covers("user.email", "user.emailaddress"));
+    }
+
+    #[test]
+    fn fieldmask_covers_rejects_shorter_path() {
+        // candidate longer than path can never cover it.
+        assert!(!fieldmask_covers("user.email", "user"));
+    }
+
+    #[test]
+    fn fieldmask_covers_empty_strings() {
+        // Empty candidate covers any path that starts with `.` (degenerate but
+        // consistent with the algebra); equal-empty covers empty.
+        assert!(fieldmask_covers("", ""));
+        assert!(!fieldmask_covers("user", ""));
+    }
+}

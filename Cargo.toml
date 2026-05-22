@@ -49,6 +49,8 @@ serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 cel = { version = "0.13", features = ["json", "chrono"] }
 fluent-uri = "0.4"
+tonic = { version = "0.14", default-features = false }
+tonic-types = "0.14"
 
 # Testing
 pretty_assertions = "1"

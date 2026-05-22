@@ -21,6 +21,8 @@ rustdoc-args = ["--cfg", "docsrs"]
 [features]
 default = ["cel"]
 cel = ["dep:cel", "dep:chrono"]
+tonic = ["dep:tonic"]
+tonic-types = ["tonic", "dep:tonic-types"]
 
 [dependencies]
 prost-protovalidate-types = { workspace = true }
@@ -33,6 +35,8 @@ serde_json = { workspace = true }
 chrono = { workspace = true, optional = true }
 cel = { workspace = true, optional = true }
 fluent-uri = { workspace = true }
+tonic = { workspace = true, optional = true, default-features = false }
+tonic-types = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

@@ -14,7 +14,7 @@ use prost_reflect::{
 use quote::quote;
 use regex::Regex;
 
-use prost_protovalidate_types::{FieldRules, Ignore, MessageRules, field_rules, timestamp_rules};
+use prost_protovalidate_types::{FieldRules, Ignore, MessageRules, field_rules};
 
 use crate::Error;
 use crate::message;
@@ -558,14 +558,14 @@ fn extension_carries_predefined_cel(
 }
 
 /// Whether `repeated.unique = true` applies to an element kind that the
-/// codegen's plain `HashSet` strategy cannot hash directly:
+/// codegen cannot handle:
 ///
-/// * `Float` / `Double` (`f32`/`f64` lack `Eq`/`Hash`)
 /// * `Message` / `Group` (prost message types don't derive `Hash`)
 ///
-/// Other scalar kinds (bool, all integer widths, string, bytes, enum) are
-/// fine. Mirrors the runtime's `UniqueKeyExtraction::Unsupported` arm —
-/// same semantic outcome: skip the codegen fast path.
+/// `Float` / `Double` (`f32`/`f64`) are handled via the canonical-bits
+/// path in [`rules::repeated::generate`], matching the runtime's
+/// `canonical_f32_bits` / `canonical_f64_bits` semantics. Other scalar
+/// kinds (bool, all integer widths, string, bytes, enum) hash directly.
 fn repeated_unique_unsupported(rules: &FieldRules, field: &FieldDescriptor) -> bool {
     use prost_reflect::Kind;
     let Some(field_rules::Type::Repeated(r)) = rules.r#type.as_ref() else {
@@ -574,23 +574,7 @@ fn repeated_unique_unsupported(rules: &FieldRules, field: &FieldDescriptor) -> b
     if r.unique != Some(true) {
         return false;
     }
-    matches!(field.kind(), Kind::Float | Kind::Double | Kind::Message(_))
-}
-
-/// Check if field rules contain time-relative timestamp constraints
-/// (`lt_now`, `gt_now`, `within`) that require the runtime `Validator`.
-fn has_time_relative_timestamp(rules: &FieldRules) -> bool {
-    let Some(field_rules::Type::Timestamp(ts)) = &rules.r#type else {
-        return false;
-    };
-    ts.less_than
-        .as_ref()
-        .is_some_and(|lt| matches!(lt, timestamp_rules::LessThan::LtNow(true)))
-        || ts
-            .greater_than
-            .as_ref()
-            .is_some_and(|gt| matches!(gt, timestamp_rules::GreaterThan::GtNow(true)))
-        || ts.within.is_some()
+    matches!(field.kind(), Kind::Message(_))
 }
 
 fn join_rule_path(prefix: &str, segment: &str) -> String {
@@ -1066,14 +1050,6 @@ impl<'a> CapabilityAnalyzer<'a> {
                     )));
                 }
 
-                if has_time_relative_timestamp(rules) {
-                    return Ok(MessageCapability::RuntimeOnly(format!(
-                        "{}.{} has time-relative timestamp rules (lt_now/gt_now/within)",
-                        msg.full_name(),
-                        field.name()
-                    )));
-                }
-
                 if let Some(invalid) = find_invalid_regex(rules) {
                     return Ok(MessageCapability::RuntimeOnly(format!(
                         "{}.{} has invalid regex at `{}`: pattern `{}` ({})",
@@ -1361,8 +1337,7 @@ fn generate_nested_validation(
 mod tests {
     use super::*;
     use prost_protovalidate_types::{
-        BytesRules, MapRules, RepeatedRules, Rule, StringRules, TimestampRules, field_rules,
-        timestamp_rules,
+        BytesRules, MapRules, RepeatedRules, Rule, StringRules, field_rules,
     };
 
     #[test]
@@ -1492,66 +1467,6 @@ mod tests {
             ..Default::default()
         };
         assert!(!has_cel_field_rules(&rules));
-    }
-
-    #[test]
-    fn time_relative_timestamp_lt_now() {
-        let rules = FieldRules {
-            r#type: Some(field_rules::Type::Timestamp(TimestampRules {
-                less_than: Some(timestamp_rules::LessThan::LtNow(true)),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-        assert!(has_time_relative_timestamp(&rules));
-    }
-
-    #[test]
-    fn time_relative_timestamp_gt_now() {
-        let rules = FieldRules {
-            r#type: Some(field_rules::Type::Timestamp(TimestampRules {
-                greater_than: Some(timestamp_rules::GreaterThan::GtNow(true)),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-        assert!(has_time_relative_timestamp(&rules));
-    }
-
-    #[test]
-    fn time_relative_timestamp_within() {
-        let rules = FieldRules {
-            r#type: Some(field_rules::Type::Timestamp(TimestampRules {
-                within: Some(prost_types::Duration {
-                    seconds: 60,
-                    nanos: 0,
-                }),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-        assert!(has_time_relative_timestamp(&rules));
-    }
-
-    #[test]
-    fn static_timestamp_is_not_time_relative() {
-        let rules = FieldRules {
-            r#type: Some(field_rules::Type::Timestamp(TimestampRules {
-                less_than: Some(timestamp_rules::LessThan::Lt(prost_types::Timestamp {
-                    seconds: 1000,
-                    nanos: 0,
-                })),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
-        assert!(!has_time_relative_timestamp(&rules));
-    }
-
-    #[test]
-    fn non_timestamp_is_not_time_relative() {
-        let rules = FieldRules::default();
-        assert!(!has_time_relative_timestamp(&rules));
     }
 
     #[test]

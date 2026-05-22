@@ -1,10 +1,16 @@
 //! Timestamp rule code generation.
 //!
-//! Covers `const` and static `lt`/`lte`/`gt`/`gte` (single and combined).
+//! Covers `const`, static `lt`/`lte`/`gt`/`gte` (single and combined), and
+//! the time-relative rules `lt_now`, `gt_now`, `within`. The time-relative
+//! branches read wall-clock time via
+//! [`::prost_protovalidate::time::now_systemtime`] — same source as the
+//! runtime `Validator`'s default `now_fn`, so behaviour parity holds. The
+//! compile-time path cannot accept an injected `now`; tests that need a
+//! deterministic clock must use the runtime `Validator` with a `now_fn`
+//! override.
+//!
 //! `TimestampRules` does not declare `in`/`not_in` so no list coverage is
-//! needed. Time-relative rules (`lt_now`, `gt_now`, `within`) are NOT
-//! covered — messages using those are routed to the runtime Validator
-//! via the capability analyzer.
+//! needed.
 //!
 //! Violation `rule_id`, `rule_path`, and message text must mirror the
 //! runtime evaluator in [`validator/rules/timestamp.rs`](../prost-protovalidate/src/validator/rules/timestamp.rs)
@@ -22,20 +28,6 @@ pub(crate) fn generate(
     proto_name: &str,
 ) -> Vec<TokenStream> {
     let mut checks = Vec::new();
-
-    // Time-relative rules are unreachable here: the capability analyzer
-    // routes those messages to runtime before they get this far.
-    let has_lt_now = rules
-        .less_than
-        .as_ref()
-        .is_some_and(|lt| matches!(lt, timestamp_rules::LessThan::LtNow(true)));
-    let has_gt_now = rules
-        .greater_than
-        .as_ref()
-        .is_some_and(|gt| matches!(gt, timestamp_rules::GreaterThan::GtNow(true)));
-    if has_lt_now || has_gt_now || rules.within.is_some() {
-        return checks;
-    }
 
     // Const — runtime emits a constant message; codegen must match.
     if let Some(ref c) = rules.r#const {
@@ -93,6 +85,84 @@ pub(crate) fn generate(
             ));
         }
         (None, None) => {}
+    }
+
+    // Time-relative rules: `lt_now`, `gt_now`, `within`. Reads wall-clock
+    // time once at validation time via `time::now_systemtime()`, matching
+    // the runtime evaluator's default `now_fn` source.
+    let has_lt_now = rules
+        .less_than
+        .as_ref()
+        .is_some_and(|lt| matches!(lt, timestamp_rules::LessThan::LtNow(true)));
+    let has_gt_now = rules
+        .greater_than
+        .as_ref()
+        .is_some_and(|gt| matches!(gt, timestamp_rules::GreaterThan::GtNow(true)));
+    let within = rules.within;
+    if has_lt_now || has_gt_now || within.is_some() {
+        let within_check: Option<TokenStream> = within.map(|w| {
+            let w_secs = w.seconds;
+            let w_nanos = w.nanos;
+            quote! {
+                // |ts - now| as nanoseconds (i128 to avoid overflow). Both
+                // bounds fit in i64 by proto spec, so the abs() of the
+                // difference safely fits when split back into (secs, nanos).
+                let _diff_nanos: i128 =
+                    (i128::from(_ts.seconds) * 1_000_000_000 + i128::from(_ts.nanos))
+                    - (i128::from(_now.seconds) * 1_000_000_000 + i128::from(_now.nanos));
+                let _abs_nanos: u128 = _diff_nanos.unsigned_abs();
+                // SAFETY: bounded by proto Duration spec; truncation is intentional.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                let _diff_secs: i64 = (_abs_nanos / 1_000_000_000) as i64;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                let _diff_subsec_nanos: i32 = (_abs_nanos % 1_000_000_000) as i32;
+                // `dur_gt(diff, within)` — same lexicographic comparison
+                // the runtime uses to flag "outside the window".
+                let _outside = _diff_secs > #w_secs
+                    || (_diff_secs == #w_secs && _diff_subsec_nanos > #w_nanos);
+                if _outside {
+                    violations.push(::prost_protovalidate::Violation::new(
+                        #proto_name,
+                        "timestamp.within",
+                        "must be within specified duration of now",
+                    ));
+                }
+            }
+        });
+
+        let lt_now_check: Option<TokenStream> = has_lt_now.then_some(quote! {
+            // `!ts_lt(ts, now)` per runtime: violation when ts >= now.
+            let _not_lt = _ts.seconds > _now.seconds
+                || (_ts.seconds == _now.seconds && _ts.nanos >= _now.nanos);
+            if _not_lt {
+                violations.push(::prost_protovalidate::Violation::new(
+                    #proto_name,
+                    "timestamp.lt_now",
+                    "must be less than now",
+                ));
+            }
+        });
+
+        let gt_now_check: Option<TokenStream> = has_gt_now.then_some(quote! {
+            let _not_gt = _ts.seconds < _now.seconds
+                || (_ts.seconds == _now.seconds && _ts.nanos <= _now.nanos);
+            if _not_gt {
+                violations.push(::prost_protovalidate::Violation::new(
+                    #proto_name,
+                    "timestamp.gt_now",
+                    "must be greater than now",
+                ));
+            }
+        });
+
+        checks.push(quote! {
+            if let Some(ref _ts) = self.#field_ident {
+                let _now = ::prost_protovalidate::time::now_systemtime();
+                #lt_now_check
+                #gt_now_check
+                #within_check
+            }
+        });
     }
 
     checks

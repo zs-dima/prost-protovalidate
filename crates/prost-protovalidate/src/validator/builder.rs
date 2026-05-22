@@ -1555,6 +1555,7 @@ fn compile_predefined_rule_programs(
         let this_presence_paths = super::evaluator::cel::collect_has_paths(&program, "this");
         let rules_presence_paths = super::evaluator::cel::collect_has_paths(&program, "rules");
         let rule_presence_paths = super::evaluator::cel::collect_has_paths(&program, "rule");
+        let references_now = super::evaluator::cel::program_references_ident(&program, "now");
         programs.push(CelRuleProgram {
             rule_id: rule.id.clone().unwrap_or_else(|| expr.clone()),
             message: rule.message.clone(),
@@ -1568,6 +1569,7 @@ fn compile_predefined_rule_programs(
             this_presence_paths,
             rules_presence_paths,
             rule_presence_paths,
+            references_now,
         });
     }
     Ok(programs)

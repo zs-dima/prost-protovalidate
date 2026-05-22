@@ -41,7 +41,7 @@ pub(crate) fn generate(
                 let _allowed: &[&str] = &[#(#allowed),*];
                 if !_fm.paths.iter().all(|_p| {
                     _allowed.iter().any(|_a| {
-                        _p == _a || _p.starts_with(&::std::format!("{_a}."))
+                        ::prost_protovalidate::validators::fieldmask_covers(_a, _p)
                     })
                 }) {
                     violations.push(::prost_protovalidate::Violation::new(
@@ -60,7 +60,7 @@ pub(crate) fn generate(
                 let _blocked: &[&str] = &[#(#blocked),*];
                 if _fm.paths.iter().any(|_p| {
                     _blocked.iter().any(|_b| {
-                        _p == _b || _p.starts_with(&::std::format!("{_b}."))
+                        ::prost_protovalidate::validators::fieldmask_covers(_b, _p)
                     })
                 }) {
                     violations.push(::prost_protovalidate::Violation::new(

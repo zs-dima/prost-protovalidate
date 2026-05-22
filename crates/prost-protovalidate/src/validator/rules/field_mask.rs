@@ -92,5 +92,5 @@ impl FieldMaskRuleEval {
 }
 
 fn path_matches(path: &str, prefix: &str) -> bool {
-    path == prefix || path.starts_with(&format!("{prefix}."))
+    crate::validators::fieldmask_covers(prefix, path)
 }

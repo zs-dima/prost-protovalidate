@@ -240,6 +240,48 @@ fn bench_format_validators(c: &mut Criterion) {
         |s| validators::is_http_header_value(s, true),
     );
 
+    // fieldmask_covers — two-argument path-coverage check. Reports
+    // Throughput::Bytes of the input path for comparability with the
+    // single-argument validators in this group. Partial-segment rejection
+    // (`user` vs `username`) is the case the allocation-free helper
+    // specifically optimises (no `format!("{prefix}.")` per check).
+    {
+        const EQ_C: &str = "user.email";
+        const EQ_P: &str = "user.email";
+        const SUB_C: &str = "user.email";
+        const SUB_P: &str = "user.email.address";
+        const PART_C: &str = "user";
+        const PART_P: &str = "username";
+
+        group.throughput(Throughput::Bytes(EQ_P.len() as u64));
+        group.bench_function("fieldmask_covers_exact", |b| {
+            b.iter(|| {
+                black_box(validators::fieldmask_covers(
+                    black_box(EQ_C),
+                    black_box(EQ_P),
+                ))
+            });
+        });
+        group.throughput(Throughput::Bytes(SUB_P.len() as u64));
+        group.bench_function("fieldmask_covers_subpath", |b| {
+            b.iter(|| {
+                black_box(validators::fieldmask_covers(
+                    black_box(SUB_C),
+                    black_box(SUB_P),
+                ))
+            });
+        });
+        group.throughput(Throughput::Bytes(PART_P.len() as u64));
+        group.bench_function("fieldmask_covers_reject_partial", |b| {
+            b.iter(|| {
+                black_box(validators::fieldmask_covers(
+                    black_box(PART_C),
+                    black_box(PART_P),
+                ))
+            });
+        });
+    }
+
     group.finish();
 }
 
