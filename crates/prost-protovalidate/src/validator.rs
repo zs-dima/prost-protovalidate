@@ -6,10 +6,13 @@ use crate::config::{NopFilter, ValidationConfig, ValidationOption, ValidatorOpti
 use crate::error::Error;
 
 mod builder;
+mod descriptor_set;
 pub(crate) mod editions;
 mod evaluator;
+pub(crate) mod formats;
 mod lookups;
 pub(crate) mod rules;
+mod wire;
 
 use builder::Builder;
 use evaluator::MessageEvaluator;

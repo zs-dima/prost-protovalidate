@@ -1,3 +1,5 @@
+use prost_protovalidate_types::rules_meta::map as meta;
+
 use crate::config::ValidationConfig;
 use crate::error::{Error, ValidationError};
 use crate::violation::Violation;
@@ -37,8 +39,8 @@ impl MapRuleEval {
             if len < min {
                 violations.push(Violation::new(
                     "",
-                    "map.min_pairs",
-                    format!("must have at least {min} entries"),
+                    meta::MIN_PAIRS_ID,
+                    meta::min_pairs_message(min),
                 ));
             }
         }
@@ -47,8 +49,8 @@ impl MapRuleEval {
             if len > max {
                 violations.push(Violation::new(
                     "",
-                    "map.max_pairs",
-                    format!("must have at most {max} entries"),
+                    meta::MAX_PAIRS_ID,
+                    meta::max_pairs_message(max),
                 ));
             }
         }

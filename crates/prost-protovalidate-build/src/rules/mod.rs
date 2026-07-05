@@ -17,6 +17,7 @@ use prost_reflect::{DescriptorPool, FieldDescriptor};
 use quote::quote;
 
 use prost_protovalidate_types::field_rules;
+use prost_protovalidate_types::rules_meta::any as any_meta;
 
 use crate::Error;
 use crate::naming::NamingContext;
@@ -223,24 +224,28 @@ fn generate_any_rules(
 ) -> Vec<TokenStream> {
     let mut checks = Vec::new();
     if !r.r#in.is_empty() {
+        let in_id = any_meta::IN_ID;
+        let in_msg = any_meta::IN_MESSAGE;
         let vals = &r.r#in;
         checks.push(quote! {
             if let ::core::option::Option::Some(ref _any) = self.#field_ident {
                 if ![#(#vals),*].contains(&_any.type_url.as_str()) {
                     violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, "any.in", "type_url must be in the allow list",
+                        #proto_name, #in_id, #in_msg,
                     ));
                 }
             }
         });
     }
     if !r.not_in.is_empty() {
+        let not_in_id = any_meta::NOT_IN_ID;
+        let not_in_msg = any_meta::NOT_IN_MESSAGE;
         let vals = &r.not_in;
         checks.push(quote! {
             if let ::core::option::Option::Some(ref _any) = self.#field_ident {
                 if [#(#vals),*].contains(&_any.type_url.as_str()) {
                     violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, "any.not_in", "type_url must not be in the block list",
+                        #proto_name, #not_in_id, #not_in_msg,
                     ));
                 }
             }

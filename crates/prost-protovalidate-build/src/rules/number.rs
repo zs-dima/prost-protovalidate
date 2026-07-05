@@ -1,49 +1,19 @@
 //! Numeric rule code generation for all 12 proto numeric types.
+//!
+//! Rule identifiers, messages, and bound-combination selection come from
+//! [`prost_protovalidate_types::rules_meta::numeric`] — the same source the
+//! runtime evaluator consumes — and are embedded into the generated code as
+//! literals. The emitted comparison for each [`RangeKind`] mirrors
+//! [`RangeKind::violated`]; the parity suites pin the correspondence.
 
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use prost_protovalidate_types::rules_meta::numeric::{self, RangeKind, RangeRule};
 use prost_protovalidate_types::{
     DoubleRules, Fixed32Rules, Fixed64Rules, FloatRules, Int32Rules, Int64Rules, SFixed32Rules,
-    SFixed64Rules, SInt32Rules, SInt64Rules, UInt32Rules, UInt64Rules, double_rules, fixed32_rules,
-    fixed64_rules, float_rules, int32_rules, int64_rules, s_fixed32_rules, s_fixed64_rules,
-    s_int32_rules, s_int64_rules, u_int32_rules, u_int64_rules,
+    SFixed64Rules, SInt32Rules, SInt64Rules, UInt32Rules, UInt64Rules,
 };
-
-/// Compute the `(rule_id, rule_path)` pair the runtime emits for a NaN value
-/// hitting a range constraint, mirroring
-/// `prost_protovalidate::validator::rules::number::numeric_inner::nan_range_violation`.
-///
-/// Returns `None` when no range constraint is set.
-fn nan_range_rule_id_and_path(
-    prefix: &str,
-    gt: Option<f64>,
-    gte: Option<f64>,
-    lt: Option<f64>,
-    lte: Option<f64>,
-) -> Option<(String, String)> {
-    let rule_id = match (gt, gte, lt, lte) {
-        (Some(g), _, Some(l), _) if g < l => format!("{prefix}.gt_lt"),
-        (Some(_), _, Some(_), _) => format!("{prefix}.gt_lt_exclusive"),
-        (Some(g), _, _, Some(le)) if g < le => format!("{prefix}.gt_lte"),
-        (Some(_), _, _, Some(_)) => format!("{prefix}.gt_lte_exclusive"),
-        (_, Some(ge), Some(l), _) if ge < l => format!("{prefix}.gte_lt"),
-        (_, Some(_), Some(_), _) => format!("{prefix}.gte_lt_exclusive"),
-        (_, Some(ge), _, Some(le)) if ge <= le => format!("{prefix}.gte_lte"),
-        (_, Some(_), _, Some(_)) => format!("{prefix}.gte_lte_exclusive"),
-        (Some(_), _, _, _) => format!("{prefix}.gt"),
-        (_, Some(_), _, _) => format!("{prefix}.gte"),
-        (_, _, Some(_), _) => format!("{prefix}.lt"),
-        (_, _, _, Some(_)) => format!("{prefix}.lte"),
-        _ => return None,
-    };
-    let rule_path = match (gt, gte) {
-        (Some(_), _) => format!("{prefix}.gt"),
-        (_, Some(_)) => format!("{prefix}.gte"),
-        _ => rule_id.clone(),
-    };
-    Some((rule_id, rule_path))
-}
 
 /// Wrap float/double `inner` checks in a labeled block with NaN/Inf guards
 /// that match runtime's early-return semantics:
@@ -54,20 +24,14 @@ fn nan_range_rule_id_and_path(
 ///
 /// When neither guard applies (no `finite`, no range bounds), the original
 /// flat checks are returned unchanged.
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 fn wrap_with_float_guards(
     prefix: &str,
     finite_required: bool,
-    gt: Option<f64>,
-    gte: Option<f64>,
-    lt: Option<f64>,
-    lte: Option<f64>,
+    nan_range: Option<(String, String)>,
     value_access: &TokenStream,
     proto_name: &str,
-    inner: Vec<TokenStream>,
+    inner: &[TokenStream],
 ) -> Vec<TokenStream> {
-    let nan_range = nan_range_rule_id_and_path(prefix, gt, gte, lt, lte);
-
     if inner.is_empty() && !finite_required && nan_range.is_none() {
         return Vec::new();
     }
@@ -85,11 +49,12 @@ fn wrap_with_float_guards(
     }
 
     let finite_check = if finite_required {
-        let rule_id = format!("{prefix}.finite");
+        let rule_id = numeric::finite_id(prefix);
+        let message = numeric::FINITE_MESSAGE;
         quote! {
             if _v.is_nan() || _v.is_infinite() {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, #rule_id, "value must be finite",
+                    #proto_name, #rule_id, #message,
                 ));
                 break 'numeric_check;
             }
@@ -123,58 +88,66 @@ fn wrap_with_float_guards(
     }]
 }
 
-/// Extracted numeric rule values ready for code generation.
-struct NumericRuleValues {
+/// Extracted numeric rule metadata ready for code generation.
+struct NumericParts {
     prefix: &'static str,
-    const_val: Option<TokenStream>,
-    lt: Option<(&'static str, TokenStream)>,
-    gt: Option<(&'static str, TokenStream)>,
+    /// `(value literal, resolved message)` for `const`.
+    const_part: Option<(TokenStream, String)>,
+    /// Resolved range rule plus the bound literals it compares against.
+    range: Option<(RangeRule, Option<TokenStream>, Option<TokenStream>)>,
+    /// `(rule_id, rule_path)` a NaN value produces against the bounds
+    /// (float/double only).
+    nan_range: Option<(String, String)>,
     in_vals: Vec<TokenStream>,
     not_in_vals: Vec<TokenStream>,
 }
 
-impl NumericRuleValues {
+impl NumericParts {
     fn generate(self, value_access: &TokenStream, proto_name: &str) -> Vec<TokenStream> {
         let mut checks = Vec::new();
 
-        if let Some(const_tokens) = self.const_val {
-            let rule_id = format!("{}.const", self.prefix);
+        if let Some((literal, message)) = self.const_part {
+            let rule_id = numeric::const_id(self.prefix);
             checks.push(quote! {
-                if #value_access != #const_tokens {
+                if #value_access != #literal {
                     violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, #rule_id, format!("value must equal {}", #const_tokens),
+                        #proto_name, #rule_id, #message,
                     ));
                 }
             });
         }
 
-        checks.extend(generate_range_check(
-            self.prefix,
-            value_access,
-            proto_name,
-            self.lt,
-            self.gt,
-        ));
+        if let Some((rule, gt, lt)) = &self.range {
+            checks.extend(generate_range_check(
+                rule,
+                gt.as_ref(),
+                lt.as_ref(),
+                value_access,
+                proto_name,
+            ));
+        }
 
         if !self.in_vals.is_empty() {
-            let rule_id = format!("{}.in", self.prefix);
+            let rule_id = numeric::in_id(self.prefix);
+            let message = numeric::IN_MESSAGE;
             let vals = &self.in_vals;
             checks.push(quote! {
                 if ![#(#vals),*].contains(&#value_access) {
                     violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, #rule_id, "value must be in list",
+                        #proto_name, #rule_id, #message,
                     ));
                 }
             });
         }
 
         if !self.not_in_vals.is_empty() {
-            let rule_id = format!("{}.not_in", self.prefix);
+            let rule_id = numeric::not_in_id(self.prefix);
+            let message = numeric::NOT_IN_MESSAGE;
             let vals = &self.not_in_vals;
             checks.push(quote! {
                 if [#(#vals),*].contains(&#value_access) {
                     violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, #rule_id, "value must not be in list",
+                        #proto_name, #rule_id, #message,
                     ));
                 }
             });
@@ -184,450 +157,183 @@ impl NumericRuleValues {
     }
 }
 
-/// Generate range check code for combined gt/gte + lt/lte bounds.
-#[allow(clippy::too_many_lines, clippy::similar_names)]
-fn generate_range_check(
-    prefix: &str,
+/// Emit the violation check for a resolved range rule. The comparison is the
+/// token-level mirror of [`RangeKind::violated`]. Also used by the duration
+/// and timestamp generators, which compare `(seconds, nanos)` tuples.
+pub(super) fn generate_range_check(
+    rule: &RangeRule,
+    gt: Option<&TokenStream>,
+    lt: Option<&TokenStream>,
     value_access: &TokenStream,
     proto_name: &str,
-    lt: Option<(&str, TokenStream)>,
-    gt: Option<(&str, TokenStream)>,
 ) -> Vec<TokenStream> {
-    let mut checks = Vec::new();
-
-    match (gt, lt) {
-        (Some((gt_op, gt_val)), Some((lt_op, lt_val))) => {
-            let gt_eq = gt_op == "gte";
-            let lt_eq = lt_op == "lte";
-
-            let gt_label = if gt_eq { "gte" } else { "gt" };
-            let lt_label = if lt_eq { "lte" } else { "lt" };
-
-            let rule_id = format!("{prefix}.{gt_label}_{lt_label}");
-            let rule_id_exclusive = format!("{prefix}.{gt_label}_{lt_label}_exclusive");
-            let rule_path = format!("{prefix}.{gt_label}");
-
-            let gt_desc = if gt_eq {
-                "greater than or equal to"
-            } else {
-                "greater than"
-            };
-            let lt_desc = if lt_eq {
-                "less than or equal to"
-            } else {
-                "less than"
-            };
-
-            let incl_msg = format!("value must be {gt_desc} {{gt}} and {lt_desc} {{lt}}");
-            let excl_msg = format!("value must be {gt_desc} {{gt}} or {lt_desc} {{lt}}");
-
-            let gt_check = if gt_eq {
-                quote! { #value_access >= #gt_val }
-            } else {
-                quote! { #value_access > #gt_val }
-            };
-
-            let lt_check = if lt_eq {
-                quote! { #value_access <= #lt_val }
-            } else {
-                quote! { #value_access < #lt_val }
-            };
-
-            let not_gt = if gt_eq {
-                quote! { #value_access < #gt_val }
-            } else {
-                quote! { #value_access <= #gt_val }
-            };
-
-            let not_lt = if lt_eq {
-                quote! { #value_access > #lt_val }
-            } else {
-                quote! { #value_access >= #lt_val }
-            };
-
-            checks.push(quote! {
-                #[allow(unused_comparisons)]
-                {
-                    if #gt_val < #lt_val {
-                        if !(#gt_check && #lt_check) {
-                            let msg = format!(#incl_msg, gt = #gt_val, lt = #lt_val);
-                            let mut violation = ::prost_protovalidate::Violation::new_constraint(
-                                #proto_name, #rule_id, #rule_path,
-                            );
-                            violation.set_message(msg);
-                            violations.push(violation);
-                        }
-                    } else if #not_lt && #not_gt {
-                        let msg = format!(#excl_msg, gt = #gt_val, lt = #lt_val);
-                        let mut violation = ::prost_protovalidate::Violation::new_constraint(
-                            #proto_name, #rule_id_exclusive, #rule_path,
-                        );
-                        violation.set_message(msg);
-                        violations.push(violation);
-                    }
-                }
-            });
+    let Some(predicate) = range_predicate(rule.kind, value_access, gt, lt) else {
+        return Vec::new();
+    };
+    let rule_id = &rule.rule_id;
+    let rule_path = &rule.rule_path;
+    let message = &rule.message;
+    // `unused_comparisons`: unsigned types can produce always-false
+    // comparisons like `v < 0u32` for a `gte: 0` bound.
+    vec![quote! {
+        #[allow(unused_comparisons)]
+        if #predicate {
+            let mut violation = ::prost_protovalidate::Violation::new_constraint(
+                #proto_name, #rule_id, #rule_path,
+            );
+            violation.set_message(#message);
+            violations.push(violation);
         }
-        (Some((op, val)), None) => {
-            let label = if op == "gte" { "gte" } else { "gt" };
-            let rule_id = format!("{prefix}.{label}");
-            let desc = if op == "gte" {
-                "greater than or equal to"
-            } else {
-                "greater than"
-            };
-            let msg = format!("value must be {desc} {{v}}");
-            let check = if op == "gte" {
-                quote! { #value_access < #val }
-            } else {
-                quote! { #value_access <= #val }
-            };
-            checks.push(quote! {
-                if #check {
-                    let msg = format!(#msg, v = #val);
-                    violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, #rule_id, msg,
-                    ));
-                }
-            });
+    }]
+}
+
+/// The comparison tokens for a [`RangeKind`]; `None` when a bound the kind
+/// requires is missing (unreachable for rules produced by `range_rule`).
+fn range_predicate(
+    kind: RangeKind,
+    v: &TokenStream,
+    gt: Option<&TokenStream>,
+    lt: Option<&TokenStream>,
+) -> Option<TokenStream> {
+    Some(match kind {
+        RangeKind::Gt => {
+            let g = gt?;
+            quote! { #v <= #g }
         }
-        (None, Some((op, val))) => {
-            let label = if op == "lte" { "lte" } else { "lt" };
-            let rule_id = format!("{prefix}.{label}");
-            let desc = if op == "lte" {
-                "less than or equal to"
-            } else {
-                "less than"
-            };
-            let msg = format!("value must be {desc} {{v}}");
-            let check = if op == "lte" {
-                quote! { #value_access > #val }
-            } else {
-                quote! { #value_access >= #val }
-            };
-            checks.push(quote! {
-                if #check {
-                    let msg = format!(#msg, v = #val);
-                    violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, #rule_id, msg,
-                    ));
-                }
-            });
+        RangeKind::Gte => {
+            let g = gt?;
+            quote! { #v < #g }
         }
-        (None, None) => {}
-    }
-
-    checks
+        RangeKind::Lt => {
+            let l = lt?;
+            quote! { #v >= #l }
+        }
+        RangeKind::Lte => {
+            let l = lt?;
+            quote! { #v > #l }
+        }
+        RangeKind::GtLt => {
+            let (g, l) = gt.zip(lt)?;
+            quote! { #v <= #g || #v >= #l }
+        }
+        RangeKind::GtLtExclusive => {
+            let (g, l) = gt.zip(lt)?;
+            quote! { #v >= #l && #v <= #g }
+        }
+        RangeKind::GtLte => {
+            let (g, l) = gt.zip(lt)?;
+            quote! { #v <= #g || #v > #l }
+        }
+        RangeKind::GtLteExclusive => {
+            let (g, l) = gt.zip(lt)?;
+            quote! { #v > #l && #v <= #g }
+        }
+        RangeKind::GteLt => {
+            let (g, l) = gt.zip(lt)?;
+            quote! { #v < #g || #v >= #l }
+        }
+        RangeKind::GteLtExclusive => {
+            let (g, l) = gt.zip(lt)?;
+            quote! { #v >= #l && #v < #g }
+        }
+        RangeKind::GteLte => {
+            let (g, l) = gt.zip(lt)?;
+            quote! { #v < #g || #v > #l }
+        }
+        RangeKind::GteLteExclusive => {
+            let (g, l) = gt.zip(lt)?;
+            quote! { #v > #l && #v < #g }
+        }
+    })
 }
 
-pub(crate) fn generate_int32(
-    rules: &Int32Rules,
-    value_access: &TokenStream,
-    proto_name: &str,
-) -> Vec<TokenStream> {
-    NumericRuleValues {
-        prefix: "int32",
-        const_val: rules.r#const.map(|val| quote! { #val }),
-        lt: rules.less_than.as_ref().map(|bound| match bound {
-            int32_rules::LessThan::Lt(val) => ("lt", quote! { #val }),
-            int32_rules::LessThan::Lte(val) => ("lte", quote! { #val }),
-        }),
-        gt: rules.greater_than.as_ref().map(|bound| match bound {
-            int32_rules::GreaterThan::Gt(val) => ("gt", quote! { #val }),
-            int32_rules::GreaterThan::Gte(val) => ("gte", quote! { #val }),
-        }),
-        in_vals: rules.r#in.iter().map(|val| quote! { #val }).collect(),
-        not_in_vals: rules.not_in.iter().map(|val| quote! { #val }).collect(),
-    }
-    .generate(value_access, proto_name)
+/// Build [`NumericParts`] from a numeric rules struct: extracts the bound
+/// oneofs, resolves the shared range/NaN metadata, and captures the value
+/// literals.
+macro_rules! numeric_parts {
+    ($rules:expr, $prefix:literal, $mod:ident) => {{
+        use prost_protovalidate_types::$mod::{GreaterThan, LessThan};
+        let (gt, gte) = match $rules.greater_than.as_ref() {
+            Some(GreaterThan::Gt(v)) => (Some(*v), None),
+            Some(GreaterThan::Gte(v)) => (None, Some(*v)),
+            None => (None, None),
+        };
+        let (lt, lte) = match $rules.less_than.as_ref() {
+            Some(LessThan::Lt(v)) => (Some(*v), None),
+            Some(LessThan::Lte(v)) => (None, Some(*v)),
+            None => (None, None),
+        };
+        let gt_tokens = gt.or(gte).map(|v| quote! { #v });
+        let lt_tokens = lt.or(lte).map(|v| quote! { #v });
+        NumericParts {
+            prefix: $prefix,
+            const_part: $rules
+                .r#const
+                .map(|c| (quote! { #c }, numeric::const_message(c))),
+            range: numeric::range_rule($prefix, gt, gte, lt, lte, |v| v.to_string())
+                .map(|rule| (rule, gt_tokens, lt_tokens)),
+            nan_range: numeric::nan_range_rule($prefix, gt, gte, lt, lte),
+            in_vals: $rules.r#in.iter().map(|v| quote! { #v }).collect(),
+            not_in_vals: $rules.not_in.iter().map(|v| quote! { #v }).collect(),
+        }
+    }};
 }
 
-pub(crate) fn generate_int64(
-    rules: &Int64Rules,
-    value_access: &TokenStream,
-    proto_name: &str,
-) -> Vec<TokenStream> {
-    NumericRuleValues {
-        prefix: "int64",
-        const_val: rules.r#const.map(|val| quote! { #val }),
-        lt: rules.less_than.as_ref().map(|bound| match bound {
-            int64_rules::LessThan::Lt(val) => ("lt", quote! { #val }),
-            int64_rules::LessThan::Lte(val) => ("lte", quote! { #val }),
-        }),
-        gt: rules.greater_than.as_ref().map(|bound| match bound {
-            int64_rules::GreaterThan::Gt(val) => ("gt", quote! { #val }),
-            int64_rules::GreaterThan::Gte(val) => ("gte", quote! { #val }),
-        }),
-        in_vals: rules.r#in.iter().map(|val| quote! { #val }).collect(),
-        not_in_vals: rules.not_in.iter().map(|val| quote! { #val }).collect(),
-    }
-    .generate(value_access, proto_name)
-}
-
-pub(crate) fn generate_uint32(
-    rules: &UInt32Rules,
-    value_access: &TokenStream,
-    proto_name: &str,
-) -> Vec<TokenStream> {
-    NumericRuleValues {
-        prefix: "uint32",
-        const_val: rules.r#const.map(|val| quote! { #val }),
-        lt: rules.less_than.as_ref().map(|bound| match bound {
-            u_int32_rules::LessThan::Lt(val) => ("lt", quote! { #val }),
-            u_int32_rules::LessThan::Lte(val) => ("lte", quote! { #val }),
-        }),
-        gt: rules.greater_than.as_ref().map(|bound| match bound {
-            u_int32_rules::GreaterThan::Gt(val) => ("gt", quote! { #val }),
-            u_int32_rules::GreaterThan::Gte(val) => ("gte", quote! { #val }),
-        }),
-        in_vals: rules.r#in.iter().map(|val| quote! { #val }).collect(),
-        not_in_vals: rules.not_in.iter().map(|val| quote! { #val }).collect(),
-    }
-    .generate(value_access, proto_name)
-}
-
-pub(crate) fn generate_uint64(
-    rules: &UInt64Rules,
-    value_access: &TokenStream,
-    proto_name: &str,
-) -> Vec<TokenStream> {
-    NumericRuleValues {
-        prefix: "uint64",
-        const_val: rules.r#const.map(|val| quote! { #val }),
-        lt: rules.less_than.as_ref().map(|bound| match bound {
-            u_int64_rules::LessThan::Lt(val) => ("lt", quote! { #val }),
-            u_int64_rules::LessThan::Lte(val) => ("lte", quote! { #val }),
-        }),
-        gt: rules.greater_than.as_ref().map(|bound| match bound {
-            u_int64_rules::GreaterThan::Gt(val) => ("gt", quote! { #val }),
-            u_int64_rules::GreaterThan::Gte(val) => ("gte", quote! { #val }),
-        }),
-        in_vals: rules.r#in.iter().map(|val| quote! { #val }).collect(),
-        not_in_vals: rules.not_in.iter().map(|val| quote! { #val }).collect(),
-    }
-    .generate(value_access, proto_name)
-}
-
-pub(crate) fn generate_sint32(
-    rules: &SInt32Rules,
-    value_access: &TokenStream,
-    proto_name: &str,
-) -> Vec<TokenStream> {
-    NumericRuleValues {
-        prefix: "sint32",
-        const_val: rules.r#const.map(|val| quote! { #val }),
-        lt: rules.less_than.as_ref().map(|bound| match bound {
-            s_int32_rules::LessThan::Lt(val) => ("lt", quote! { #val }),
-            s_int32_rules::LessThan::Lte(val) => ("lte", quote! { #val }),
-        }),
-        gt: rules.greater_than.as_ref().map(|bound| match bound {
-            s_int32_rules::GreaterThan::Gt(val) => ("gt", quote! { #val }),
-            s_int32_rules::GreaterThan::Gte(val) => ("gte", quote! { #val }),
-        }),
-        in_vals: rules.r#in.iter().map(|val| quote! { #val }).collect(),
-        not_in_vals: rules.not_in.iter().map(|val| quote! { #val }).collect(),
-    }
-    .generate(value_access, proto_name)
-}
-
-pub(crate) fn generate_sint64(
-    rules: &SInt64Rules,
-    value_access: &TokenStream,
-    proto_name: &str,
-) -> Vec<TokenStream> {
-    NumericRuleValues {
-        prefix: "sint64",
-        const_val: rules.r#const.map(|val| quote! { #val }),
-        lt: rules.less_than.as_ref().map(|bound| match bound {
-            s_int64_rules::LessThan::Lt(val) => ("lt", quote! { #val }),
-            s_int64_rules::LessThan::Lte(val) => ("lte", quote! { #val }),
-        }),
-        gt: rules.greater_than.as_ref().map(|bound| match bound {
-            s_int64_rules::GreaterThan::Gt(val) => ("gt", quote! { #val }),
-            s_int64_rules::GreaterThan::Gte(val) => ("gte", quote! { #val }),
-        }),
-        in_vals: rules.r#in.iter().map(|val| quote! { #val }).collect(),
-        not_in_vals: rules.not_in.iter().map(|val| quote! { #val }).collect(),
-    }
-    .generate(value_access, proto_name)
-}
-
-pub(crate) fn generate_fixed32(
-    rules: &Fixed32Rules,
-    value_access: &TokenStream,
-    proto_name: &str,
-) -> Vec<TokenStream> {
-    NumericRuleValues {
-        prefix: "fixed32",
-        const_val: rules.r#const.map(|val| quote! { #val }),
-        lt: rules.less_than.as_ref().map(|bound| match bound {
-            fixed32_rules::LessThan::Lt(val) => ("lt", quote! { #val }),
-            fixed32_rules::LessThan::Lte(val) => ("lte", quote! { #val }),
-        }),
-        gt: rules.greater_than.as_ref().map(|bound| match bound {
-            fixed32_rules::GreaterThan::Gt(val) => ("gt", quote! { #val }),
-            fixed32_rules::GreaterThan::Gte(val) => ("gte", quote! { #val }),
-        }),
-        in_vals: rules.r#in.iter().map(|val| quote! { #val }).collect(),
-        not_in_vals: rules.not_in.iter().map(|val| quote! { #val }).collect(),
-    }
-    .generate(value_access, proto_name)
-}
-
-pub(crate) fn generate_fixed64(
-    rules: &Fixed64Rules,
-    value_access: &TokenStream,
-    proto_name: &str,
-) -> Vec<TokenStream> {
-    NumericRuleValues {
-        prefix: "fixed64",
-        const_val: rules.r#const.map(|val| quote! { #val }),
-        lt: rules.less_than.as_ref().map(|bound| match bound {
-            fixed64_rules::LessThan::Lt(val) => ("lt", quote! { #val }),
-            fixed64_rules::LessThan::Lte(val) => ("lte", quote! { #val }),
-        }),
-        gt: rules.greater_than.as_ref().map(|bound| match bound {
-            fixed64_rules::GreaterThan::Gt(val) => ("gt", quote! { #val }),
-            fixed64_rules::GreaterThan::Gte(val) => ("gte", quote! { #val }),
-        }),
-        in_vals: rules.r#in.iter().map(|val| quote! { #val }).collect(),
-        not_in_vals: rules.not_in.iter().map(|val| quote! { #val }).collect(),
-    }
-    .generate(value_access, proto_name)
-}
-
-pub(crate) fn generate_sfixed32(
-    rules: &SFixed32Rules,
-    value_access: &TokenStream,
-    proto_name: &str,
-) -> Vec<TokenStream> {
-    NumericRuleValues {
-        prefix: "sfixed32",
-        const_val: rules.r#const.map(|val| quote! { #val }),
-        lt: rules.less_than.as_ref().map(|bound| match bound {
-            s_fixed32_rules::LessThan::Lt(val) => ("lt", quote! { #val }),
-            s_fixed32_rules::LessThan::Lte(val) => ("lte", quote! { #val }),
-        }),
-        gt: rules.greater_than.as_ref().map(|bound| match bound {
-            s_fixed32_rules::GreaterThan::Gt(val) => ("gt", quote! { #val }),
-            s_fixed32_rules::GreaterThan::Gte(val) => ("gte", quote! { #val }),
-        }),
-        in_vals: rules.r#in.iter().map(|val| quote! { #val }).collect(),
-        not_in_vals: rules.not_in.iter().map(|val| quote! { #val }).collect(),
-    }
-    .generate(value_access, proto_name)
-}
-
-pub(crate) fn generate_sfixed64(
-    rules: &SFixed64Rules,
-    value_access: &TokenStream,
-    proto_name: &str,
-) -> Vec<TokenStream> {
-    NumericRuleValues {
-        prefix: "sfixed64",
-        const_val: rules.r#const.map(|val| quote! { #val }),
-        lt: rules.less_than.as_ref().map(|bound| match bound {
-            s_fixed64_rules::LessThan::Lt(val) => ("lt", quote! { #val }),
-            s_fixed64_rules::LessThan::Lte(val) => ("lte", quote! { #val }),
-        }),
-        gt: rules.greater_than.as_ref().map(|bound| match bound {
-            s_fixed64_rules::GreaterThan::Gt(val) => ("gt", quote! { #val }),
-            s_fixed64_rules::GreaterThan::Gte(val) => ("gte", quote! { #val }),
-        }),
-        in_vals: rules.r#in.iter().map(|val| quote! { #val }).collect(),
-        not_in_vals: rules.not_in.iter().map(|val| quote! { #val }).collect(),
-    }
-    .generate(value_access, proto_name)
-}
-
-pub(crate) fn generate_float(
-    rules: &FloatRules,
-    value_access: &TokenStream,
-    proto_name: &str,
-) -> Vec<TokenStream> {
-    let (gt, gte) = match rules.greater_than.as_ref() {
-        Some(float_rules::GreaterThan::Gt(v)) => (Some(f64::from(*v)), None),
-        Some(float_rules::GreaterThan::Gte(v)) => (None, Some(f64::from(*v))),
-        None => (None, None),
+macro_rules! int_generator {
+    ($fn_name:ident, $rules_ty:ty, $prefix:literal, $mod:ident) => {
+        pub(crate) fn $fn_name(
+            rules: &$rules_ty,
+            value_access: &TokenStream,
+            proto_name: &str,
+        ) -> Vec<TokenStream> {
+            numeric_parts!(rules, $prefix, $mod).generate(value_access, proto_name)
+        }
     };
-    let (lt, lte) = match rules.less_than.as_ref() {
-        Some(float_rules::LessThan::Lt(v)) => (Some(f64::from(*v)), None),
-        Some(float_rules::LessThan::Lte(v)) => (None, Some(f64::from(*v))),
-        None => (None, None),
-    };
-
-    let inner_access = quote! { _v };
-    let inner = NumericRuleValues {
-        prefix: "float",
-        const_val: rules.r#const.map(|val| quote! { #val }),
-        lt: rules.less_than.as_ref().map(|bound| match bound {
-            float_rules::LessThan::Lt(val) => ("lt", quote! { #val }),
-            float_rules::LessThan::Lte(val) => ("lte", quote! { #val }),
-        }),
-        gt: rules.greater_than.as_ref().map(|bound| match bound {
-            float_rules::GreaterThan::Gt(val) => ("gt", quote! { #val }),
-            float_rules::GreaterThan::Gte(val) => ("gte", quote! { #val }),
-        }),
-        in_vals: rules.r#in.iter().map(|val| quote! { #val }).collect(),
-        not_in_vals: rules.not_in.iter().map(|val| quote! { #val }).collect(),
-    }
-    .generate(&inner_access, proto_name);
-
-    wrap_with_float_guards(
-        "float",
-        rules.finite == Some(true),
-        gt,
-        gte,
-        lt,
-        lte,
-        value_access,
-        proto_name,
-        inner,
-    )
 }
 
-pub(crate) fn generate_double(
-    rules: &DoubleRules,
-    value_access: &TokenStream,
-    proto_name: &str,
-) -> Vec<TokenStream> {
-    let (gt, gte) = match rules.greater_than.as_ref() {
-        Some(double_rules::GreaterThan::Gt(v)) => (Some(*v), None),
-        Some(double_rules::GreaterThan::Gte(v)) => (None, Some(*v)),
-        None => (None, None),
-    };
-    let (lt, lte) = match rules.less_than.as_ref() {
-        Some(double_rules::LessThan::Lt(v)) => (Some(*v), None),
-        Some(double_rules::LessThan::Lte(v)) => (None, Some(*v)),
-        None => (None, None),
-    };
+int_generator!(generate_int32, Int32Rules, "int32", int32_rules);
+int_generator!(generate_int64, Int64Rules, "int64", int64_rules);
+int_generator!(generate_uint32, UInt32Rules, "uint32", u_int32_rules);
+int_generator!(generate_uint64, UInt64Rules, "uint64", u_int64_rules);
+int_generator!(generate_sint32, SInt32Rules, "sint32", s_int32_rules);
+int_generator!(generate_sint64, SInt64Rules, "sint64", s_int64_rules);
+int_generator!(generate_fixed32, Fixed32Rules, "fixed32", fixed32_rules);
+int_generator!(generate_fixed64, Fixed64Rules, "fixed64", fixed64_rules);
+int_generator!(
+    generate_sfixed32,
+    SFixed32Rules,
+    "sfixed32",
+    s_fixed32_rules
+);
+int_generator!(
+    generate_sfixed64,
+    SFixed64Rules,
+    "sfixed64",
+    s_fixed64_rules
+);
 
-    let inner_access = quote! { _v };
-    let inner = NumericRuleValues {
-        prefix: "double",
-        const_val: rules.r#const.map(|val| quote! { #val }),
-        lt: rules.less_than.as_ref().map(|bound| match bound {
-            double_rules::LessThan::Lt(val) => ("lt", quote! { #val }),
-            double_rules::LessThan::Lte(val) => ("lte", quote! { #val }),
-        }),
-        gt: rules.greater_than.as_ref().map(|bound| match bound {
-            double_rules::GreaterThan::Gt(val) => ("gt", quote! { #val }),
-            double_rules::GreaterThan::Gte(val) => ("gte", quote! { #val }),
-        }),
-        in_vals: rules.r#in.iter().map(|val| quote! { #val }).collect(),
-        not_in_vals: rules.not_in.iter().map(|val| quote! { #val }).collect(),
-    }
-    .generate(&inner_access, proto_name);
-
-    wrap_with_float_guards(
-        "double",
-        rules.finite == Some(true),
-        gt,
-        gte,
-        lt,
-        lte,
-        value_access,
-        proto_name,
-        inner,
-    )
+macro_rules! float_generator {
+    ($fn_name:ident, $rules_ty:ty, $prefix:literal, $mod:ident) => {
+        pub(crate) fn $fn_name(
+            rules: &$rules_ty,
+            value_access: &TokenStream,
+            proto_name: &str,
+        ) -> Vec<TokenStream> {
+            let parts = numeric_parts!(rules, $prefix, $mod);
+            let nan_range = parts.nan_range.clone();
+            let inner_access = quote! { _v };
+            let inner = parts.generate(&inner_access, proto_name);
+            wrap_with_float_guards(
+                $prefix,
+                rules.finite == Some(true),
+                nan_range,
+                value_access,
+                proto_name,
+                &inner,
+            )
+        }
+    };
 }
+
+float_generator!(generate_float, FloatRules, "float", float_rules);
+float_generator!(generate_double, DoubleRules, "double", double_rules);

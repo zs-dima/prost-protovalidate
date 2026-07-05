@@ -3,6 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use prost_protovalidate_types::rules_meta::string as meta;
 use prost_protovalidate_types::{StringRules, string_rules};
 
 #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
@@ -15,11 +16,12 @@ pub(crate) fn generate(
 
     // Const
     if let Some(ref c) = rules.r#const {
-        let msg = format!("must equal `{c}`");
+        let rule_id = meta::CONST_ID;
+        let msg = meta::const_message(c);
         checks.push(quote! {
             if #value_access != #c {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "string.const", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -28,11 +30,12 @@ pub(crate) fn generate(
     // Exact character length
     if let Some(len) = rules.len {
         let len_usize = len as usize;
-        let msg = format!("must be {len} characters");
+        let rule_id = meta::LEN_ID;
+        let msg = meta::len_message(len);
         checks.push(quote! {
             if #value_access.chars().count() != #len_usize {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "string.len", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -41,11 +44,12 @@ pub(crate) fn generate(
     // Min length (characters)
     if let Some(min) = rules.min_len {
         let min_usize = min as usize;
-        let msg = format!("value length must be at least {min} characters");
+        let rule_id = meta::MIN_LEN_ID;
+        let msg = meta::min_len_message(min);
         checks.push(quote! {
             if #value_access.chars().count() < #min_usize {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "string.min_len", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -54,11 +58,12 @@ pub(crate) fn generate(
     // Max length (characters)
     if let Some(max) = rules.max_len {
         let max_usize = max as usize;
-        let msg = format!("value length must be at most {max} characters");
+        let rule_id = meta::MAX_LEN_ID;
+        let msg = meta::max_len_message(max);
         checks.push(quote! {
             if #value_access.chars().count() > #max_usize {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "string.max_len", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -67,11 +72,12 @@ pub(crate) fn generate(
     // Exact byte length
     if let Some(len) = rules.len_bytes {
         let len_usize = len as usize;
-        let msg = format!("must be {len} bytes");
+        let rule_id = meta::LEN_BYTES_ID;
+        let msg = meta::len_bytes_message(len);
         checks.push(quote! {
             if #value_access.len() != #len_usize {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "string.len_bytes", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -80,11 +86,12 @@ pub(crate) fn generate(
     // Min bytes
     if let Some(min) = rules.min_bytes {
         let min_usize = min as usize;
-        let msg = format!("must be at least {min} bytes");
+        let rule_id = meta::MIN_BYTES_ID;
+        let msg = meta::min_bytes_message(min);
         checks.push(quote! {
             if #value_access.len() < #min_usize {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "string.min_bytes", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -93,11 +100,12 @@ pub(crate) fn generate(
     // Max bytes
     if let Some(max) = rules.max_bytes {
         let max_usize = max as usize;
-        let msg = format!("must be at most {max} bytes");
+        let rule_id = meta::MAX_BYTES_ID;
+        let msg = meta::max_bytes_message(max);
         checks.push(quote! {
             if #value_access.len() > #max_usize {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "string.max_bytes", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -110,7 +118,8 @@ pub(crate) fn generate(
     // surfaces a future regex-crate regression loudly instead of
     // misreporting validation as a silent pattern mismatch.
     if let Some(ref pattern) = rules.pattern {
-        let msg = format!("does not match regex pattern `{pattern}`");
+        let rule_id = meta::PATTERN_ID;
+        let msg = meta::pattern_message(pattern);
         checks.push(quote! {
             {
                 static RE: ::std::sync::LazyLock<::prost_protovalidate::regex::Regex> =
@@ -120,7 +129,7 @@ pub(crate) fn generate(
                     });
                 if !RE.is_match(&#value_access) {
                     violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, "string.pattern", #msg,
+                        #proto_name, #rule_id, #msg,
                     ));
                 }
             }
@@ -129,11 +138,12 @@ pub(crate) fn generate(
 
     // Prefix
     if let Some(ref prefix) = rules.prefix {
-        let msg = format!("does not have prefix `{prefix}`");
+        let rule_id = meta::PREFIX_ID;
+        let msg = meta::prefix_message(prefix);
         checks.push(quote! {
             if !#value_access.starts_with(#prefix) {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "string.prefix", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -141,11 +151,12 @@ pub(crate) fn generate(
 
     // Suffix
     if let Some(ref suffix) = rules.suffix {
-        let msg = format!("does not have suffix `{suffix}`");
+        let rule_id = meta::SUFFIX_ID;
+        let msg = meta::suffix_message(suffix);
         checks.push(quote! {
             if !#value_access.ends_with(#suffix) {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "string.suffix", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -153,11 +164,12 @@ pub(crate) fn generate(
 
     // Contains
     if let Some(ref contains) = rules.contains {
-        let msg = format!("does not contain substring `{contains}`");
+        let rule_id = meta::CONTAINS_ID;
+        let msg = meta::contains_message(contains);
         checks.push(quote! {
             if !#value_access.contains(#contains) {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "string.contains", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -165,11 +177,12 @@ pub(crate) fn generate(
 
     // Not contains
     if let Some(ref not_contains) = rules.not_contains {
-        let msg = format!("contains substring `{not_contains}`");
+        let rule_id = meta::NOT_CONTAINS_ID;
+        let msg = meta::not_contains_message(not_contains);
         checks.push(quote! {
             if #value_access.contains(#not_contains) {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "string.not_contains", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -178,6 +191,8 @@ pub(crate) fn generate(
     // In list — sort to match the deterministic runtime format
     // (`format!("must be in list {sorted:?}")` where `sorted: Vec<&String>`).
     if !rules.r#in.is_empty() {
+        let rule_id = meta::IN_ID;
+        let msg = meta::in_message(&rules.r#in);
         let mut sorted: Vec<&String> = rules.r#in.iter().collect();
         sorted.sort();
         let vals = sorted;
@@ -186,7 +201,7 @@ pub(crate) fn generate(
                 let _s: &str = &#value_access;
                 if ![#(#vals),*].contains(&_s) {
                     violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, "string.in", format!("must be in list {:?}", &[#(#vals),*]),
+                        #proto_name, #rule_id, #msg,
                     ));
                 }
             }
@@ -195,6 +210,8 @@ pub(crate) fn generate(
 
     // Not-in list — same sorted format.
     if !rules.not_in.is_empty() {
+        let rule_id = meta::NOT_IN_ID;
+        let msg = meta::not_in_message(&rules.not_in);
         let mut sorted: Vec<&String> = rules.not_in.iter().collect();
         sorted.sort();
         let vals = sorted;
@@ -203,7 +220,7 @@ pub(crate) fn generate(
                 let _s: &str = &#value_access;
                 if [#(#vals),*].contains(&_s) {
                     violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, "string.not_in", format!("must not be in list {:?}", &[#(#vals),*]),
+                        #proto_name, #rule_id, #msg,
                     ));
                 }
             }
@@ -378,26 +395,25 @@ fn generate_well_known(
         string_rules::WellKnown::WellKnownRegex(kind) => {
             match prost_protovalidate_types::KnownRegex::try_from(kind) {
                 Ok(prost_protovalidate_types::KnownRegex::HttpHeaderName) => {
+                    let empty_id = meta::HEADER_NAME_EMPTY_ID;
+                    let id = meta::HEADER_NAME_ID;
+                    let path = meta::WELL_KNOWN_REGEX_PATH;
                     vec![quote! {
                         if !::prost_protovalidate::validators::is_http_header_name(&#value_access, #strict) {
-                            let rule_id = if #value_access.is_empty() {
-                                "string.well_known_regex.header_name_empty"
-                            } else {
-                                "string.well_known_regex.header_name"
-                            };
+                            let rule_id = if #value_access.is_empty() { #empty_id } else { #id };
                             violations.push(::prost_protovalidate::Violation::new_constraint(
-                                #proto_name, rule_id, "string.well_known_regex",
+                                #proto_name, rule_id, #path,
                             ));
                         }
                     }]
                 }
                 Ok(prost_protovalidate_types::KnownRegex::HttpHeaderValue) => {
+                    let id = meta::HEADER_VALUE_ID;
+                    let path = meta::WELL_KNOWN_REGEX_PATH;
                     vec![quote! {
                         if !::prost_protovalidate::validators::is_http_header_value(&#value_access, #strict) {
                             violations.push(::prost_protovalidate::Violation::new_constraint(
-                                #proto_name,
-                                "string.well_known_regex.header_value",
-                                "string.well_known_regex",
+                                #proto_name, #id, #path,
                             ));
                         }
                     }]
@@ -419,9 +435,9 @@ fn format_check(
     format_name: &str,
     is_valid: TokenStream,
 ) -> TokenStream {
-    let empty_rule_id = format!("string.{format_name}_empty");
-    let format_rule_id = format!("string.{format_name}");
-    let rule_path = format!("string.{format_name}");
+    let empty_rule_id = meta::well_known_empty_id(format_name);
+    let format_rule_id = meta::well_known_id(format_name);
+    let rule_path = meta::well_known_id(format_name);
 
     quote! {
         if #value_access.is_empty() {

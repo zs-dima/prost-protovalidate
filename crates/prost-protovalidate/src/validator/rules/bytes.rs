@@ -2,6 +2,8 @@ use std::collections::HashSet;
 
 use regex::bytes::Regex as BytesRegex;
 
+use prost_protovalidate_types::rules_meta::bytes as meta;
+
 use crate::config::ValidationConfig;
 use crate::error::{CompilationError, Error, RuntimeError, ValidationError};
 use crate::violation::Violation;
@@ -96,11 +98,7 @@ impl BytesRuleEval {
 
         if let Some(ref c) = self.r#const {
             if b != c.as_slice() {
-                violations.push(Violation::new(
-                    "",
-                    "bytes.const",
-                    format!("value must be {c:?}"),
-                ));
+                violations.push(Violation::new("", meta::CONST_ID, meta::const_message(c)));
             }
         }
 
@@ -111,8 +109,8 @@ impl BytesRuleEval {
             if len != expected {
                 violations.push(Violation::new(
                     "",
-                    "bytes.len",
-                    format!("value length must be {expected} bytes"),
+                    meta::LEN_ID,
+                    meta::len_message(expected),
                 ));
             }
         }
@@ -120,8 +118,8 @@ impl BytesRuleEval {
             if len < min {
                 violations.push(Violation::new(
                     "",
-                    "bytes.min_len",
-                    format!("value length must be at least {min} bytes"),
+                    meta::MIN_LEN_ID,
+                    meta::min_len_message(min),
                 ));
             }
         }
@@ -129,8 +127,8 @@ impl BytesRuleEval {
             if len > max {
                 violations.push(Violation::new(
                     "",
-                    "bytes.max_len",
-                    format!("value length must be at most {max} bytes"),
+                    meta::MAX_LEN_ID,
+                    meta::max_len_message(max),
                 ));
             }
         }
@@ -149,8 +147,8 @@ impl BytesRuleEval {
             if !pat.is_match(b) {
                 violations.push(Violation::new(
                     "",
-                    "bytes.pattern",
-                    format!("value must match regex pattern `{}`", pat.as_str()),
+                    meta::PATTERN_ID,
+                    meta::pattern_message(pat.as_str()),
                 ));
             }
         }
@@ -159,8 +157,8 @@ impl BytesRuleEval {
             if !b.starts_with(prefix) {
                 violations.push(Violation::new(
                     "",
-                    "bytes.prefix",
-                    format!("value does not have prefix {prefix:?}"),
+                    meta::PREFIX_ID,
+                    meta::prefix_message(prefix),
                 ));
             }
         }
@@ -168,8 +166,8 @@ impl BytesRuleEval {
             if !b.ends_with(suffix) {
                 violations.push(Violation::new(
                     "",
-                    "bytes.suffix",
-                    format!("value does not have suffix {suffix:?}"),
+                    meta::SUFFIX_ID,
+                    meta::suffix_message(suffix),
                 ));
             }
         }
@@ -178,21 +176,17 @@ impl BytesRuleEval {
             {
                 violations.push(Violation::new(
                     "",
-                    "bytes.contains",
-                    format!("value does not contain {contains:?}"),
+                    meta::CONTAINS_ID,
+                    meta::contains_message(contains),
                 ));
             }
         }
 
         if !self.r#in.is_empty() && !self.r#in.contains(b.as_ref()) {
-            violations.push(Violation::new("", "bytes.in", "value must be in list"));
+            violations.push(Violation::new("", meta::IN_ID, meta::IN_MESSAGE));
         }
         if self.not_in.contains(b.as_ref()) {
-            violations.push(Violation::new(
-                "",
-                "bytes.not_in",
-                "value must not be in list",
-            ));
+            violations.push(Violation::new("", meta::NOT_IN_ID, meta::NOT_IN_MESSAGE));
         }
 
         if let Some(wk) = self.well_known {
@@ -201,60 +195,44 @@ impl BytesRuleEval {
                     if b.is_empty() {
                         violations.push(Violation::new(
                             "",
-                            "bytes.ip_empty",
-                            "value is empty, which is not a valid IP address",
+                            meta::IP_EMPTY_ID,
+                            meta::IP_EMPTY_MESSAGE,
                         ));
                     } else if b.len() != 4 && b.len() != 16 {
-                        violations.push(Violation::new(
-                            "",
-                            "bytes.ip",
-                            "value must be a valid IP address",
-                        ));
+                        violations.push(Violation::new("", meta::IP_ID, meta::IP_MESSAGE));
                     }
                 }
                 BytesWellKnown::Ipv4 => {
                     if b.is_empty() {
                         violations.push(Violation::new(
                             "",
-                            "bytes.ipv4_empty",
-                            "value is empty, which is not a valid IPv4 address",
+                            meta::IPV4_EMPTY_ID,
+                            meta::IPV4_EMPTY_MESSAGE,
                         ));
                     } else if b.len() != 4 {
-                        violations.push(Violation::new(
-                            "",
-                            "bytes.ipv4",
-                            "value must be a valid IPv4 address",
-                        ));
+                        violations.push(Violation::new("", meta::IPV4_ID, meta::IPV4_MESSAGE));
                     }
                 }
                 BytesWellKnown::Ipv6 => {
                     if b.is_empty() {
                         violations.push(Violation::new(
                             "",
-                            "bytes.ipv6_empty",
-                            "value is empty, which is not a valid IPv6 address",
+                            meta::IPV6_EMPTY_ID,
+                            meta::IPV6_EMPTY_MESSAGE,
                         ));
                     } else if b.len() != 16 {
-                        violations.push(Violation::new(
-                            "",
-                            "bytes.ipv6",
-                            "value must be a valid IPv6 address",
-                        ));
+                        violations.push(Violation::new("", meta::IPV6_ID, meta::IPV6_MESSAGE));
                     }
                 }
                 BytesWellKnown::Uuid => {
                     if b.is_empty() {
                         violations.push(Violation::new_constraint(
                             "",
-                            "bytes.uuid_empty",
-                            "bytes.uuid",
+                            meta::UUID_EMPTY_ID,
+                            meta::UUID_ID,
                         ));
                     } else if b.len() != 16 {
-                        violations.push(Violation::new(
-                            "",
-                            "bytes.uuid",
-                            "value must be a valid UUID",
-                        ));
+                        violations.push(Violation::new("", meta::UUID_ID, meta::UUID_MESSAGE));
                     }
                 }
             }

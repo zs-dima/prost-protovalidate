@@ -12,6 +12,7 @@ Generated Rust types for the [buf.validate](https://github.com/bufbuild/protoval
 - A shared `DESCRIPTOR_POOL` containing the file descriptor set for runtime reflection.
 - Extension traits for extracting constraint annotations from `prost-reflect` descriptors (`FieldConstraintsExt`, `MessageConstraintsExt`, `OneofConstraintsExt`, and more).
 - Typed helper functions (`field_constraints_typed`, `message_constraints_typed`, `oneof_constraints_typed`, `predefined_constraints_typed`) for callers that need concrete decode errors.
+- The `rules_meta` module: canonical rule ids, violation message templates, and range-combination tables consumed by both the runtime validator and the build-time code generator.
 
 ## When to use this crate
 
@@ -23,7 +24,7 @@ Use `prost-protovalidate-types` when you only need the generated types or descri
 
 | prost-protovalidate-types | prost | prost-reflect | MSRV |
 | ------------------------- | ----- | ------------- | ---- |
-| 0.3.x                     | 0.14  | 0.16          | 1.86 |
+| 0.4.x                     | 0.14  | 0.16          | 1.86 |
 
 ## License
 

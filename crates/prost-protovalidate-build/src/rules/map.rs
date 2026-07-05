@@ -4,6 +4,7 @@ use proc_macro2::{Ident, TokenStream};
 use prost_reflect::{DescriptorPool, FieldDescriptor};
 use quote::quote;
 
+use prost_protovalidate_types::rules_meta::map as meta;
 use prost_protovalidate_types::{Ignore, MapRules};
 
 use crate::Error;
@@ -32,11 +33,12 @@ pub(crate) fn generate(
     // Min pairs
     if let Some(min) = rules.min_pairs {
         let min_usize = min as usize;
-        let msg = format!("must have at least {min} entries");
+        let rule_id = meta::MIN_PAIRS_ID;
+        let msg = meta::min_pairs_message(min);
         checks.push(quote! {
             if self.#field_ident.len() < #min_usize {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "map.min_pairs", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -45,11 +47,12 @@ pub(crate) fn generate(
     // Max pairs
     if let Some(max) = rules.max_pairs {
         let max_usize = max as usize;
-        let msg = format!("must have at most {max} entries");
+        let rule_id = meta::MAX_PAIRS_ID;
+        let msg = meta::max_pairs_message(max);
         checks.push(quote! {
             if self.#field_ident.len() > #max_usize {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "map.max_pairs", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -107,6 +110,7 @@ pub(crate) fn generate(
                         }
                     };
 
+                    let keys_prefix = meta::KEYS_RULE_PREFIX;
                     checks.push(quote! {
                         for (_k, _) in &self.#field_ident {
                             let mut _local_violations: ::std::vec::Vec<
@@ -117,7 +121,7 @@ pub(crate) fn generate(
                             }
                             for mut _v_inner in _local_violations {
                                 _v_inner.mark_for_key();
-                                _v_inner.prepend_rule_path("map.keys");
+                                _v_inner.prepend_rule_path(#keys_prefix);
                                 #key_subscript
                                 violations.push(_v_inner);
                             }
@@ -174,6 +178,7 @@ pub(crate) fn generate(
                         }
                     };
 
+                    let values_prefix = meta::VALUES_RULE_PREFIX;
                     checks.push(quote! {
                         for (_k, _v) in &self.#field_ident {
                             let mut _local_violations: ::std::vec::Vec<
@@ -183,7 +188,7 @@ pub(crate) fn generate(
                                 #body
                             }
                             for mut _v_inner in _local_violations {
-                                _v_inner.prepend_rule_path("map.values");
+                                _v_inner.prepend_rule_path(#values_prefix);
                                 #key_subscript
                                 violations.push(_v_inner);
                             }

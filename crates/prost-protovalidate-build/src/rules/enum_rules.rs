@@ -4,6 +4,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use prost_protovalidate_types::EnumRules;
+use prost_protovalidate_types::rules_meta::enumeration as meta;
 
 /// Generate enum validation checks.
 ///
@@ -20,11 +21,12 @@ pub(crate) fn generate(
 
     // Const (prost represents enum fields as i32)
     if let Some(c) = rules.r#const {
-        let msg = format!("must equal {c}");
+        let rule_id = meta::CONST_ID;
+        let msg = meta::const_message(c);
         checks.push(quote! {
             if #value_access != #c {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "enum.const", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -32,10 +34,12 @@ pub(crate) fn generate(
 
     // defined_only: value must be one of the declared enum numbers
     if rules.defined_only == Some(true) && !defined_values.is_empty() {
+        let defined_only_id = meta::DEFINED_ONLY_ID;
+        let defined_only_msg = meta::DEFINED_ONLY_MESSAGE;
         checks.push(quote! {
             if ![#(#defined_values),*].contains(&#value_access) {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "enum.defined_only", "value must be one of the defined enum values",
+                    #proto_name, #defined_only_id, #defined_only_msg,
                 ));
             }
         });
@@ -43,13 +47,15 @@ pub(crate) fn generate(
 
     // In — sort to match the deterministic runtime format.
     if !rules.r#in.is_empty() {
+        let rule_id = meta::IN_ID;
+        let msg = meta::in_message(&rules.r#in);
         let mut sorted: Vec<i32> = rules.r#in.clone();
         sorted.sort_unstable();
         let vals = sorted;
         checks.push(quote! {
             if ![#(#vals),*].contains(&#value_access) {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "enum.in", format!("must be in list {:?}", &[#(#vals),*]),
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -57,13 +63,15 @@ pub(crate) fn generate(
 
     // Not-in — same sorted format.
     if !rules.not_in.is_empty() {
+        let rule_id = meta::NOT_IN_ID;
+        let msg = meta::not_in_message(&rules.not_in);
         let mut sorted: Vec<i32> = rules.not_in.clone();
         sorted.sort_unstable();
         let vals = sorted;
         checks.push(quote! {
             if [#(#vals),*].contains(&#value_access) {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "enum.not_in", format!("must not be in list {:?}", &[#(#vals),*]),
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });

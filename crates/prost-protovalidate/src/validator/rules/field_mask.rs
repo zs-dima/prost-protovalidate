@@ -2,6 +2,8 @@ use std::collections::HashSet;
 
 use prost_reflect::ReflectMessage;
 
+use prost_protovalidate_types::rules_meta::field_mask as meta;
+
 use crate::config::ValidationConfig;
 use crate::error::{Error, ValidationError};
 use crate::violation::Violation;
@@ -53,7 +55,7 @@ impl FieldMaskRuleEval {
 
         if let Some(expected) = &self.r#const {
             if &paths != expected {
-                violations.push(Violation::new("", "field_mask.const", "must equal paths"));
+                violations.push(Violation::new("", meta::CONST_ID, meta::CONST_MESSAGE));
             }
         }
 
@@ -62,11 +64,7 @@ impl FieldMaskRuleEval {
                 .iter()
                 .all(|path| self.r#in.iter().any(|allowed| path_matches(path, allowed)))
         {
-            violations.push(Violation::new(
-                "",
-                "field_mask.in",
-                "must only contain allowed paths",
-            ));
+            violations.push(Violation::new("", meta::IN_ID, meta::IN_MESSAGE));
         }
 
         if !self.not_in.is_empty()
@@ -76,11 +74,7 @@ impl FieldMaskRuleEval {
                     .any(|blocked| path_matches(path, blocked))
             })
         {
-            violations.push(Violation::new(
-                "",
-                "field_mask.not_in",
-                "must not contain forbidden paths",
-            ));
+            violations.push(Violation::new("", meta::NOT_IN_ID, meta::NOT_IN_MESSAGE));
         }
 
         if violations.is_empty() {

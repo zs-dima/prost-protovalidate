@@ -11,6 +11,7 @@ fmt-check:
 lint:
 	cargo clippy --all-targets --all-features -- -D warnings
 	cargo clippy --all-targets -p prost-protovalidate --no-default-features -- -D warnings
+	cargo clippy --all-targets -p prost-protovalidate --no-default-features --features tonic -- -D warnings
 	cargo deny check
 
 test:
@@ -18,6 +19,8 @@ test:
 
 test-no-cel:
 	cargo test -p prost-protovalidate --no-default-features
+	cargo test -p prost-protovalidate-tests --no-default-features
+	cargo test -p prost-protovalidate --no-default-features --features tonic
 
 bench:
 	cargo bench --all-features -p prost-protovalidate

@@ -1,10 +1,11 @@
-use std::collections::HashSet;
+use prost_protovalidate_types::rules_meta::numeric;
 
 use crate::config::ValidationConfig;
 use crate::error::{Error, ValidationError};
 use crate::violation::Violation;
 
-/// Macro for float types that need NaN handling and use `Vec`-based `in`/`not_in`.
+/// Macro for float types: NaN/finite handling wrapped around the shared
+/// numeric core.
 macro_rules! float_rule_eval {
     ($name:ident, $rules_ty:ty, $value_ty:ty, $extract_method:ident, $rules_mod:ident, $prefix:literal) => {
         pub(crate) struct $name {
@@ -15,27 +16,13 @@ macro_rules! float_rule_eval {
         impl $name {
             pub fn new(rules: &$rules_ty) -> Self {
                 Self {
-                    inner: numeric_inner::NumericInner {
-                        r#const: rules.r#const,
-                        lt: rules.less_than.as_ref().and_then(|lt| match lt {
-                            prost_protovalidate_types::$rules_mod::LessThan::Lt(v) => Some(*v),
-                            _ => None,
-                        }),
-                        lte: rules.less_than.as_ref().and_then(|lt| match lt {
-                            prost_protovalidate_types::$rules_mod::LessThan::Lte(v) => Some(*v),
-                            _ => None,
-                        }),
-                        gt: rules.greater_than.as_ref().and_then(|gt| match gt {
-                            prost_protovalidate_types::$rules_mod::GreaterThan::Gt(v) => Some(*v),
-                            _ => None,
-                        }),
-                        gte: rules.greater_than.as_ref().and_then(|gt| match gt {
-                            prost_protovalidate_types::$rules_mod::GreaterThan::Gte(v) => Some(*v),
-                            _ => None,
-                        }),
-                        r#in: rules.r#in.clone(),
-                        not_in: rules.not_in.clone(),
-                    },
+                    inner: numeric_inner::NumericInner::new(
+                        $prefix,
+                        rules.r#const,
+                        extract_bounds!(rules, $rules_mod),
+                        rules.r#in.clone(),
+                        rules.not_in.clone(),
+                    ),
                     finite: rules.finite.unwrap_or(false),
                 }
             }
@@ -57,70 +44,45 @@ macro_rules! float_rule_eval {
                 if self.finite && (v.is_nan() || v.is_infinite()) {
                     return Err(ValidationError::new(vec![Violation::new(
                         "",
-                        concat!($prefix, ".finite"),
-                        "value must be finite",
+                        numeric::finite_id($prefix),
+                        numeric::FINITE_MESSAGE,
                     )])
                     .into());
                 }
                 // NaN fails all range comparisons — reject explicitly
-                if v.is_nan() && self.inner.has_range_constraint() {
-                    return Err(ValidationError::new(vec![
-                        self.inner.nan_range_violation($prefix),
-                    ])
-                    .into());
+                if v.is_nan() {
+                    if let Some(violation) = self.inner.nan_range_violation() {
+                        return Err(ValidationError::new(vec![violation]).into());
+                    }
                 }
-                self.inner.evaluate(v, $prefix)
+                self.inner.evaluate(v)
             }
         }
     };
 }
 
-/// Macro for integer types (no NaN, use `HashSet` directly).
+/// Macro for integer types: the shared numeric core without NaN handling.
 macro_rules! int_rule_eval {
     ($name:ident, $rules_ty:ty, $value_ty:ty, $extract_method:ident, $rules_mod:ident, $prefix:literal) => {
         pub(crate) struct $name {
-            r#const: Option<$value_ty>,
-            lt: Option<$value_ty>,
-            lte: Option<$value_ty>,
-            gt: Option<$value_ty>,
-            gte: Option<$value_ty>,
-            r#in: HashSet<$value_ty>,
-            not_in: HashSet<$value_ty>,
+            inner: numeric_inner::NumericInner<$value_ty>,
         }
 
         impl $name {
             pub fn new(rules: &$rules_ty) -> Self {
                 Self {
-                    r#const: rules.r#const,
-                    lt: rules.less_than.as_ref().and_then(|lt| match lt {
-                        prost_protovalidate_types::$rules_mod::LessThan::Lt(v) => Some(*v),
-                        _ => None,
-                    }),
-                    lte: rules.less_than.as_ref().and_then(|lt| match lt {
-                        prost_protovalidate_types::$rules_mod::LessThan::Lte(v) => Some(*v),
-                        _ => None,
-                    }),
-                    gt: rules.greater_than.as_ref().and_then(|gt| match gt {
-                        prost_protovalidate_types::$rules_mod::GreaterThan::Gt(v) => Some(*v),
-                        _ => None,
-                    }),
-                    gte: rules.greater_than.as_ref().and_then(|gt| match gt {
-                        prost_protovalidate_types::$rules_mod::GreaterThan::Gte(v) => Some(*v),
-                        _ => None,
-                    }),
-                    r#in: rules.r#in.iter().copied().collect(),
-                    not_in: rules.not_in.iter().copied().collect(),
+                    inner: numeric_inner::NumericInner::new(
+                        $prefix,
+                        rules.r#const,
+                        extract_bounds!(rules, $rules_mod),
+                        rules.r#in.clone(),
+                        rules.not_in.clone(),
+                    ),
                 }
             }
 
             pub fn tautology(&self) -> bool {
-                self.r#const.is_none()
-                    && self.lt.is_none()
-                    && self.lte.is_none()
-                    && self.gt.is_none()
-                    && self.gte.is_none()
-                    && self.r#in.is_empty()
-                    && self.not_in.is_empty()
+                self.inner.tautology()
             }
 
             pub fn evaluate(
@@ -132,288 +94,133 @@ macro_rules! int_rule_eval {
                     Some(v) => v as $value_ty,
                     None => return Ok(()),
                 };
-
-                let mut violations = Vec::new();
-
-                if let Some(c) = self.r#const {
-                    if v != c {
-                        violations.push(Violation::new(
-                            "",
-                            concat!($prefix, ".const"),
-                            format!("value must equal {c}"),
-                        ));
-                    }
-                }
-
-                check_range(
-                    v,
-                    self.gt,
-                    self.gte,
-                    self.lt,
-                    self.lte,
-                    $prefix,
-                    &mut violations,
-                );
-
-                if !self.r#in.is_empty() && !self.r#in.contains(&v) {
-                    violations.push(Violation::new(
-                        "",
-                        concat!($prefix, ".in"),
-                        "value must be in list",
-                    ));
-                }
-
-                if self.not_in.contains(&v) {
-                    violations.push(Violation::new(
-                        "",
-                        concat!($prefix, ".not_in"),
-                        "value must not be in list",
-                    ));
-                }
-
-                if violations.is_empty() {
-                    Ok(())
-                } else {
-                    Err(ValidationError::new(violations).into())
-                }
+                self.inner.evaluate(v)
             }
         }
     };
 }
 
-#[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
-fn check_range<T: PartialOrd + std::fmt::Display>(
-    v: T,
-    gt: Option<T>,
-    gte: Option<T>,
-    lt: Option<T>,
-    lte: Option<T>,
-    prefix: &str,
-    violations: &mut Vec<Violation>,
-) {
-    match (&gt, &gte, &lt, &lte) {
-        (Some(gt), None, Some(lt), None) => {
-            if *gt < *lt {
-                if v <= *gt || v >= *lt {
-                    violations.push(
-                        Violation::new(
-                            "",
-                            format!("{prefix}.gt_lt"),
-                            format!("value must be greater than {gt} and less than {lt}"),
-                        )
-                        .with_rule_path(format!("{prefix}.gt")),
-                    );
-                }
-            } else if v >= *lt && v <= *gt {
-                violations.push(
-                    Violation::new(
-                        "",
-                        format!("{prefix}.gt_lt_exclusive"),
-                        format!("value must be greater than {gt} or less than {lt}"),
-                    )
-                    .with_rule_path(format!("{prefix}.gt")),
-                );
-            }
-        }
-        (Some(gt), None, None, Some(lte)) => {
-            if *gt < *lte {
-                if v <= *gt || v > *lte {
-                    violations.push(
-                        Violation::new(
-                            "",
-                            format!("{prefix}.gt_lte"),
-                            format!(
-                                "value must be greater than {gt} and less than or equal to {lte}"
-                            ),
-                        )
-                        .with_rule_path(format!("{prefix}.gt")),
-                    );
-                }
-            } else if v > *lte && v <= *gt {
-                violations.push(
-                    Violation::new(
-                        "",
-                        format!("{prefix}.gt_lte_exclusive"),
-                        format!("value must be greater than {gt} or less than or equal to {lte}"),
-                    )
-                    .with_rule_path(format!("{prefix}.gt")),
-                );
-            }
-        }
-        (None, Some(gte), Some(lt), None) => {
-            if *gte < *lt {
-                if v < *gte || v >= *lt {
-                    violations.push(
-                        Violation::new(
-                            "",
-                            format!("{prefix}.gte_lt"),
-                            format!(
-                                "value must be greater than or equal to {gte} and less than {lt}"
-                            ),
-                        )
-                        .with_rule_path(format!("{prefix}.gte")),
-                    );
-                }
-            } else if v >= *lt && v < *gte {
-                violations.push(
-                    Violation::new(
-                        "",
-                        format!("{prefix}.gte_lt_exclusive"),
-                        format!("value must be greater than or equal to {gte} or less than {lt}"),
-                    )
-                    .with_rule_path(format!("{prefix}.gte")),
-                );
-            }
-        }
-        (None, Some(gte), None, Some(lte)) => {
-            if *gte <= *lte {
-                if v < *gte || v > *lte {
-                    violations.push(
-                        Violation::new(
-                            "",
-                            format!("{prefix}.gte_lte"),
-                            format!("value must be greater than or equal to {gte} and less than or equal to {lte}"),
-                        )
-                        .with_rule_path(format!("{prefix}.gte")),
-                    );
-                }
-            } else if v > *lte && v < *gte {
-                violations.push(
-                    Violation::new(
-                        "",
-                        format!("{prefix}.gte_lte_exclusive"),
-                        format!(
-                            "value must be greater than or equal to {gte} or less than or equal to {lte}"
-                        ),
-                    )
-                    .with_rule_path(format!("{prefix}.gte")),
-                );
-            }
-        }
-        (Some(gt), None, None, None) if v <= *gt => {
-            violations.push(Violation::new(
-                "",
-                format!("{prefix}.gt"),
-                format!("value must be greater than {gt}"),
-            ));
-        }
-        (None, Some(gte), None, None) if v < *gte => {
-            violations.push(Violation::new(
-                "",
-                format!("{prefix}.gte"),
-                format!("value must be greater than or equal to {gte}"),
-            ));
-        }
-        (None, None, Some(lt), None) if v >= *lt => {
-            violations.push(Violation::new(
-                "",
-                format!("{prefix}.lt"),
-                format!("value must be less than {lt}"),
-            ));
-        }
-        (None, None, None, Some(lte)) if v > *lte => {
-            violations.push(Violation::new(
-                "",
-                format!("{prefix}.lte"),
-                format!("value must be less than or equal to {lte}"),
-            ));
-        }
-        _ => {}
-    }
+/// Extract `(gt, gte, lt, lte)` from a numeric rules struct's bound oneofs.
+macro_rules! extract_bounds {
+    ($rules:expr, $rules_mod:ident) => {{
+        use prost_protovalidate_types::$rules_mod::{GreaterThan, LessThan};
+        let (gt, gte) = match $rules.greater_than.as_ref() {
+            Some(GreaterThan::Gt(v)) => (Some(*v), None),
+            Some(GreaterThan::Gte(v)) => (None, Some(*v)),
+            None => (None, None),
+        };
+        let (lt, lte) = match $rules.less_than.as_ref() {
+            Some(LessThan::Lt(v)) => (Some(*v), None),
+            Some(LessThan::Lte(v)) => (None, Some(*v)),
+            None => (None, None),
+        };
+        (gt, gte, lt, lte)
+    }};
 }
 
 mod numeric_inner {
-    use super::{Error, ValidationError, Violation, check_range};
+    use prost_protovalidate_types::rules_meta::numeric;
 
+    use super::{Error, ValidationError, Violation};
+
+    /// Shared `const`/range/`in`/`not_in` evaluation for every numeric type.
+    ///
+    /// Rule identifiers, messages, and the bound-combination selection are
+    /// resolved once at construction through
+    /// [`prost_protovalidate_types::rules_meta::numeric`] — the same source
+    /// the build-time code generator embeds into generated validators.
+    ///
+    /// `in`/`not_in` use linear `Vec` scans: `f32`/`f64` are not
+    /// `Hash`/`Eq`, rule lists are hand-written in protos and tiny, and for
+    /// floats IEEE `==` is exactly the comparison `contains` performs
+    /// (a NaN value never equals a list member).
     pub(super) struct NumericInner<T> {
-        pub r#const: Option<T>,
-        pub lt: Option<T>,
-        pub lte: Option<T>,
-        pub gt: Option<T>,
-        pub gte: Option<T>,
-        pub r#in: Vec<T>,
-        pub not_in: Vec<T>,
+        prefix: &'static str,
+        r#const: Option<T>,
+        /// The `gt`/`gte` bound value, when set.
+        gt_bound: Option<T>,
+        /// The `lt`/`lte` bound value, when set.
+        lt_bound: Option<T>,
+        /// Resolved range rule (kind + id + path + message), when any bound
+        /// is set.
+        range: Option<numeric::RangeRule>,
+        /// Precomputed `(rule_id, rule_path)` a NaN value produces against
+        /// the range bounds (float types only ever trigger it).
+        nan_range: Option<(String, String)>,
+        r#in: Vec<T>,
+        not_in: Vec<T>,
     }
 
     impl<T: PartialOrd + PartialEq + std::fmt::Display + Copy> NumericInner<T> {
+        pub fn new(
+            prefix: &'static str,
+            r#const: Option<T>,
+            (gt, gte, lt, lte): (Option<T>, Option<T>, Option<T>, Option<T>),
+            r#in: Vec<T>,
+            not_in: Vec<T>,
+        ) -> Self {
+            Self {
+                prefix,
+                r#const,
+                gt_bound: gt.or(gte),
+                lt_bound: lt.or(lte),
+                range: numeric::range_rule(prefix, gt, gte, lt, lte, T::to_string),
+                nan_range: numeric::nan_range_rule(prefix, gt, gte, lt, lte),
+                r#in,
+                not_in,
+            }
+        }
+
         pub fn tautology(&self) -> bool {
             self.r#const.is_none()
-                && self.lt.is_none()
-                && self.lte.is_none()
-                && self.gt.is_none()
-                && self.gte.is_none()
+                && self.range.is_none()
                 && self.r#in.is_empty()
                 && self.not_in.is_empty()
         }
 
-        /// Whether any range constraint (gt/gte/lt/lte) is set.
-        pub fn has_range_constraint(&self) -> bool {
-            self.gt.is_some() || self.gte.is_some() || self.lt.is_some() || self.lte.is_some()
+        /// The violation a NaN value produces when a range constraint is
+        /// set (empty message per the conformance corpus).
+        pub fn nan_range_violation(&self) -> Option<Violation> {
+            self.nan_range.as_ref().map(|(rule_id, rule_path)| {
+                Violation::new("", rule_id.clone(), "").with_rule_path(rule_path.clone())
+            })
         }
 
-        /// Build the violation that NaN should produce for the first applicable range rule.
-        pub fn nan_range_violation(&self, prefix: &str) -> Violation {
-            // Determine the appropriate rule_id based on the combination of range constraints.
-            // Exclusive ranges (gt >= lt or gte > lte) use the `_exclusive` suffix.
-            let rule_id = match (&self.gt, &self.gte, &self.lt, &self.lte) {
-                (Some(gt), _, Some(lt), _) if *gt < *lt => format!("{prefix}.gt_lt"),
-                (Some(_), _, Some(_), _) => format!("{prefix}.gt_lt_exclusive"),
-                (Some(gt), _, _, Some(lte)) if *gt < *lte => format!("{prefix}.gt_lte"),
-                (Some(_), _, _, Some(_)) => format!("{prefix}.gt_lte_exclusive"),
-                (_, Some(gte), Some(lt), _) if *gte < *lt => format!("{prefix}.gte_lt"),
-                (_, Some(_), Some(_), _) => format!("{prefix}.gte_lt_exclusive"),
-                (_, Some(gte), _, Some(lte)) if *gte <= *lte => format!("{prefix}.gte_lte"),
-                (_, Some(_), _, Some(_)) => format!("{prefix}.gte_lte_exclusive"),
-                (Some(_), _, _, _) => format!("{prefix}.gt"),
-                (_, Some(_), _, _) => format!("{prefix}.gte"),
-                (_, _, Some(_), _) => format!("{prefix}.lt"),
-                (_, _, _, Some(_)) => format!("{prefix}.lte"),
-                _ => unreachable!("has_range_constraint was true"),
-            };
-            let rule_path = match (&self.gt, &self.gte) {
-                (Some(_), _) => format!("{prefix}.gt"),
-                (_, Some(_)) => format!("{prefix}.gte"),
-                _ => rule_id.clone(),
-            };
-            Violation::new("", &rule_id, "").with_rule_path(rule_path)
-        }
-
-        pub fn evaluate(&self, v: T, prefix: &str) -> Result<(), Error> {
+        pub fn evaluate(&self, v: T) -> Result<(), Error> {
             let mut violations = Vec::new();
 
             if let Some(c) = self.r#const {
                 if v != c {
                     violations.push(Violation::new(
                         "",
-                        format!("{prefix}.const"),
-                        format!("value must equal {c}"),
+                        numeric::const_id(self.prefix),
+                        numeric::const_message(c),
                     ));
                 }
             }
 
-            check_range(
-                v,
-                self.gt,
-                self.gte,
-                self.lt,
-                self.lte,
-                prefix,
-                &mut violations,
-            );
+            if let Some(range) = &self.range {
+                if range.kind.violated(self.gt_bound, self.lt_bound, v) {
+                    violations.push(
+                        Violation::new("", range.rule_id.clone(), range.message.clone())
+                            .with_rule_path(range.rule_path.clone()),
+                    );
+                }
+            }
 
             if !self.r#in.is_empty() && !self.r#in.contains(&v) {
                 violations.push(Violation::new(
                     "",
-                    format!("{prefix}.in"),
-                    "value must be in list",
+                    numeric::in_id(self.prefix),
+                    numeric::IN_MESSAGE,
                 ));
             }
 
             if self.not_in.contains(&v) {
                 violations.push(Violation::new(
                     "",
-                    format!("{prefix}.not_in"),
-                    "value must not be in list",
+                    numeric::not_in_id(self.prefix),
+                    numeric::NOT_IN_MESSAGE,
                 ));
             }
 

@@ -1,5 +1,7 @@
 use prost_reflect::{DynamicMessage, EnumDescriptor};
 
+use prost_protovalidate_types::rules_meta::enumeration as meta;
+
 use crate::config::ValidationConfig;
 use crate::error::{Error, ValidationError};
 use crate::violation::Violation;
@@ -29,8 +31,8 @@ impl Evaluator for DefinedEnumEval {
         if self.enum_descriptor.get_value(enum_number).is_none() {
             return Err(ValidationError::single(Violation::new(
                 "",
-                "enum.defined_only",
-                "value must be one of the defined enum values",
+                meta::DEFINED_ONLY_ID,
+                meta::DEFINED_ONLY_MESSAGE,
             ))
             .into());
         }

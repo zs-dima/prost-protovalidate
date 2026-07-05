@@ -836,7 +836,6 @@ dependencies = [
  "prost-build",
  "prost-protovalidate-types",
  "prost-reflect",
- "prost-reflect-build",
  "prost-types",
  "quote",
  "regex",

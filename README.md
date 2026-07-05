@@ -11,7 +11,7 @@ By default, `prost-protovalidate` evaluates `buf.validate` constraints (includin
 
 ## Key Features
 
-- **Compile-time validation (fastest path at runtime)** — [`prost-protovalidate-build`](crates/prost-protovalidate-build/) emits `impl Validate` for messages with standard-only rules; no `prost-reflect` transcoding, no CEL interpreter, monomorphized direct field access. Combined with `default-features = false` on `prost-protovalidate`, the entire `cel` / `chrono` / `paste` / `thiserror` 1.x subtree drops out of your build. Trades binary size and build time for hot-path speed; messages with CEL automatically fall back to the runtime `Validator` (with a `cargo:warning=` diagnostic, never silently skipped).
+- **Compile-time validation (fastest path at runtime)** — [`prost-protovalidate-build`](crates/prost-protovalidate-build/) emits `impl Validate` for messages with standard-only rules; no `prost-reflect` transcoding, no CEL interpreter, monomorphized direct field access. Combined with `default-features = false` on `prost-protovalidate`, the entire `cel` / `chrono` / `pastey` / `thiserror` 1.x subtree drops out of your build. Trades binary size and build time for hot-path speed; messages with CEL automatically fall back to the runtime `Validator` (with a `cargo:warning=` diagnostic, never silently skipped).
 - **Proto as single source of truth** — Define validation rules inside `.proto` files using `buf.validate` and enforce them automatically in Rust.
 - **Runtime validation with CEL** — Leverages `prost-reflect` to dynamically inspect message fields and evaluate complex validation rules, including arbitrary CEL expressions, at runtime.
 - **CEL Evaluation** — Fully supports compiling and evaluating Common Expression Language (CEL) conditions for cross-field or complex constraints.
@@ -22,7 +22,7 @@ By default, `prost-protovalidate` evaluates `buf.validate` constraints (includin
 
 | Crate                                                          | Purpose                                                         | Cargo section          |
 | -------------------------------------------------------------- | --------------------------------------------------------------- | ---------------------- |
-| [prost-protovalidate-types](crates/prost-protovalidate-types/) | `buf.validate` proto types with prost and prost-reflect support | `[dependencies]`       |
+| [prost-protovalidate-types](crates/prost-protovalidate-types/) | `buf.validate` proto types with prost and prost-reflect support; hosts `rules_meta` (canonical rule ids/messages for both engines) | `[dependencies]`       |
 | [prost-protovalidate](crates/prost-protovalidate/)             | Runtime validation engine (CEL parsing, constraint evaluation)  | `[dependencies]`       |
 | [prost-protovalidate-build](crates/prost-protovalidate-build/) | Compile-time code generator for validation                      | `[build-dependencies]` |
 
@@ -45,7 +45,7 @@ prost-protovalidate = "0.4"
 | `tonic-types` | No      | Implies `tonic`. Attaches `google.rpc.BadRequest` details to validation-failure statuses so clients can parse field-level errors without scraping the message string   |
 
 To disable CEL for a lighter dependency footprint (removes `cel`, `chrono`,
-`paste`, and `thiserror` 1.x transitive deps):
+`pastey`, and `thiserror` 1.x transitive deps):
 
 ```toml
 [dependencies]
@@ -113,7 +113,7 @@ For messages with **only** standard rules (no CEL). Validators are generated
 at compile time and run through monomorphized direct field access — **no
 `prost-reflect` transcoding, no CEL interpreter, no dynamic dispatch** on
 the hot path. Combined with `default-features = false` on
-`prost-protovalidate`, the entire `cel` / `chrono` / `paste` / `thiserror`
+`prost-protovalidate`, the entire `cel` / `chrono` / `pastey` / `thiserror`
 1.x subtree drops out of your build. Requires `prost-protovalidate-build` in
 `[build-dependencies]`.
 
@@ -138,7 +138,7 @@ validator.validate(&msg)?;
 ### Runtime validation without CEL (lightweight)
 
 For services that don't use CEL. Disabling the `cel` feature removes `cel`,
-`chrono`, `paste`, and transitive `thiserror` 1.x deps. Pairs naturally with
+`chrono`, `pastey`, and transitive `thiserror` 1.x deps. Pairs naturally with
 compile-time validators above for a CEL-free dependency tree end to end.
 
 ```toml
@@ -260,6 +260,17 @@ generation (with a `cargo:warning` explaining why). Messages that
 transitively depend on runtime-only nested validation are also skipped to
 avoid partial generated validation. Use the runtime `Validator` for those
 messages.
+
+## Development
+
+Building from source requires `protoc` (the `prost-protovalidate-types` build
+script compiles the vendored `buf.validate` schema). Install it via your
+package manager or set the `PROTOC` environment variable to the binary path.
+
+```bash
+make pre-commit     # fmt-check + lint + test (run before committing)
+make conformance    # conformance suite (requires Go)
+```
 
 ## Conformance
 

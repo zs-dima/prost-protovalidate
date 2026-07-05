@@ -4,6 +4,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use prost_protovalidate_types::BoolRules;
+use prost_protovalidate_types::rules_meta::boolean as meta;
 
 pub(crate) fn generate(
     rules: &BoolRules,
@@ -13,11 +14,12 @@ pub(crate) fn generate(
     let mut checks = Vec::new();
 
     if let Some(c) = rules.r#const {
-        let msg = format!("must equal {c}");
+        let rule_id = meta::CONST_ID;
+        let msg = meta::const_message(c);
         checks.push(quote! {
             if #value_access != #c {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bool.const", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });

@@ -17,9 +17,7 @@ include = ["src/", "LICENSE-*", "README.md"]
 [dependencies]
 prost = { workspace = true }
 prost-types = { workspace = true }
-prost-build = { workspace = true }
 prost-reflect = { workspace = true }
-prost-reflect-build = { workspace = true }
 prost-protovalidate-types = { workspace = true }
 quote = { workspace = true }
 proc-macro2 = { workspace = true }
@@ -27,6 +25,9 @@ prettyplease = { workspace = true }
 syn = { workspace = true }
 thiserror = { workspace = true }
 regex = { workspace = true }
+
+[dev-dependencies]
+prost-build = { workspace = true }
 
 [lints]
 workspace = true

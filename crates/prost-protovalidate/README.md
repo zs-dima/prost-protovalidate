@@ -14,7 +14,7 @@ By default, dynamically inspects `prost-reflect` message descriptors, compiles `
 ```toml
 [dependencies]
 prost = "0.14"
-prost-protovalidate = "0.3"
+prost-protovalidate = "0.4"
 ```
 
 Annotate your `.proto` files with `buf.validate` rules:
@@ -57,7 +57,7 @@ validator.validate(&request)?;
 
 ## Features
 
-- **Compile-time validation via `prost-protovalidate-build` (fastest at runtime)** — companion crate [`prost-protovalidate-build`](https://crates.io/crates/prost-protovalidate-build) emits `impl Validate` at compile time for messages with standard-only rules. Monomorphized direct field access, no `prost-reflect` transcoding, no CEL interpreter on the hot path. Disable the `cel` feature to also drop `cel`, `chrono`, `paste`, and transitive `thiserror` 1.x from your dependency tree. Messages that need CEL fall back to the runtime `Validator` automatically (with a `cargo:warning=` diagnostic, never silently skipped).
+- **Compile-time validation via `prost-protovalidate-build` (fastest at runtime)** — companion crate [`prost-protovalidate-build`](https://crates.io/crates/prost-protovalidate-build) emits `impl Validate` at compile time for messages with standard-only rules. Monomorphized direct field access, no `prost-reflect` transcoding, no CEL interpreter on the hot path. Disable the `cel` feature to also drop `cel`, `chrono`, `pastey`, and transitive `thiserror` 1.x from your dependency tree. Messages that need CEL fall back to the runtime `Validator` automatically (with a `cargo:warning=` diagnostic, never silently skipped).
 - **Dynamic field inspection** via `prost-reflect` descriptors — no static code generation needed for validators.
 - **CEL evaluation** — compiles and evaluates Common Expression Language expressions for cross-field and complex constraints.
 - **Aggregated violations** — collects all constraint failures instead of short-circuiting on the first error.
@@ -67,7 +67,7 @@ validator.validate(&request)?;
 
 | prost-protovalidate | prost | prost-reflect | MSRV |
 | ------------------- | ----- | ------------- | ---- |
-| 0.3.x               | 0.14  | 0.16          | 1.86 |
+| 0.4.x               | 0.14  | 0.16          | 1.86 |
 
 ## License
 

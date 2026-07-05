@@ -38,7 +38,10 @@ impl Evaluator for ListEval {
                 .evaluate_value_split(msg, item, cfg, &item_path);
             // Only direct (item-level) violations get the "repeated.items" rule prefix.
             // Nested (embedded message) violations keep their own rule paths.
-            let direct = prepend_rule_prefix(direct, "repeated.items");
+            let direct = prepend_rule_prefix(
+                direct,
+                prost_protovalidate_types::rules_meta::repeated::ITEMS_RULE_PREFIX,
+            );
             let (cont, new_acc) = error::merge_violations(acc, direct, cfg.fail_fast);
             acc = new_acc;
             if !cont {

@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+use prost_protovalidate_types::rules_meta::enumeration as meta;
+
 use crate::config::ValidationConfig;
 use crate::error::{Error, ValidationError};
 use crate::violation::Violation;
@@ -36,29 +38,21 @@ impl EnumRuleEval {
 
         if let Some(c) = self.r#const {
             if v != c {
-                violations.push(Violation::new("", "enum.const", format!("must equal {c}")));
+                violations.push(Violation::new("", meta::CONST_ID, meta::const_message(c)));
             }
         }
 
         if !self.r#in.is_empty() && !self.r#in.contains(&v) {
-            // Sort so the rendered list is deterministic — HashSet iteration
-            // order is randomised per `RandomState`.
-            let mut sorted: Vec<i32> = self.r#in.iter().copied().collect();
-            sorted.sort_unstable();
-            violations.push(Violation::new(
-                "",
-                "enum.in",
-                format!("must be in list {sorted:?}"),
-            ));
+            let values: Vec<i32> = self.r#in.iter().copied().collect();
+            violations.push(Violation::new("", meta::IN_ID, meta::in_message(&values)));
         }
 
         if self.not_in.contains(&v) {
-            let mut sorted: Vec<i32> = self.not_in.iter().copied().collect();
-            sorted.sort_unstable();
+            let values: Vec<i32> = self.not_in.iter().copied().collect();
             violations.push(Violation::new(
                 "",
-                "enum.not_in",
-                format!("must not be in list {sorted:?}"),
+                meta::NOT_IN_ID,
+                meta::not_in_message(&values),
             ));
         }
 

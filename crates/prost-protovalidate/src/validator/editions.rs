@@ -9,6 +9,8 @@ use std::collections::HashMap;
 
 use prost::encoding::{WireType, decode_key, decode_varint, encode_key, encode_varint};
 
+use super::wire::{decode_len, skip_wire_value};
+
 /// `FeatureSet.field_presence` values.
 const FIELD_PRESENCE_EXPLICIT: i32 = 1;
 const FIELD_PRESENCE_LEGACY_REQUIRED: i32 = 3;
@@ -96,7 +98,7 @@ pub fn normalize_edition_descriptor_set(bytes: &[u8]) -> Vec<u8> {
                 cursor = &cursor[len..];
             }
             _ => {
-                if skip_wire_value_simple(&mut cursor, wire_type).is_err() {
+                if skip_wire_value(&mut cursor, wire_type).is_err() {
                     return bytes.to_vec();
                 }
             }
@@ -131,7 +133,7 @@ pub fn normalize_edition_descriptor_set(bytes: &[u8]) -> Vec<u8> {
             out.extend_from_slice(&normalized);
         } else {
             let start = cursor;
-            if skip_wire_value_simple(&mut cursor, wire_type).is_err() {
+            if skip_wire_value(&mut cursor, wire_type).is_err() {
                 return bytes.to_vec();
             }
             // Re-encode the tag + data.
@@ -161,7 +163,7 @@ fn file_has_editions_syntax(bytes: &[u8]) -> bool {
                 return &cursor[..len] == b"editions";
             }
             _ => {
-                if skip_wire_value_simple(&mut cursor, wire_type).is_err() {
+                if skip_wire_value(&mut cursor, wire_type).is_err() {
                     return false;
                 }
             }
@@ -186,7 +188,7 @@ fn extract_feature_set_varint(bytes: &[u8], field_tag: u32) -> i32 {
                 return v as i32;
             }
             _ => {
-                if skip_wire_value_simple(&mut cursor, wire_type).is_err() {
+                if skip_wire_value(&mut cursor, wire_type).is_err() {
                     break;
                 }
             }
@@ -221,7 +223,7 @@ fn extract_feature_varint(options_bytes: &[u8], features_tag: u32, field_tag: u3
                 cursor = &cursor[len..];
             }
             _ => {
-                if skip_wire_value_simple(&mut cursor, wire_type).is_err() {
+                if skip_wire_value(&mut cursor, wire_type).is_err() {
                     break;
                 }
             }
@@ -257,7 +259,7 @@ fn extract_file_level_feature(bytes: &[u8], feature_field_tag: u32) -> i32 {
                 }
             }
             _ => {
-                if skip_wire_value_simple(&mut cursor, wire_type).is_err() {
+                if skip_wire_value(&mut cursor, wire_type).is_err() {
                     break;
                 }
             }
@@ -352,7 +354,7 @@ fn normalize_file_descriptor(bytes: &[u8]) -> Vec<u8> {
             // Pass through all other fields unchanged.
             _ => {
                 let pre = cursor;
-                if skip_wire_value_simple(&mut cursor, wire_type).is_err() {
+                if skip_wire_value(&mut cursor, wire_type).is_err() {
                     return bytes.to_vec();
                 }
                 encode_key(tag, wire_type, &mut out);
@@ -391,7 +393,7 @@ fn normalize_message_descriptor(
             if tag == message_tags::ONEOF_DECL && wire_type == WireType::LengthDelimited {
                 oneof_count += 1;
             }
-            if skip_wire_value_simple(&mut scan, wire_type).is_err() {
+            if skip_wire_value(&mut scan, wire_type).is_err() {
                 break;
             }
         }
@@ -422,7 +424,7 @@ fn normalize_message_descriptor(
                     fields_needing_synthetic_oneof.push((field_index, info.name.clone()));
                 }
                 field_index += 1;
-            } else if skip_wire_value_simple(&mut scan, wire_type).is_err() {
+            } else if skip_wire_value(&mut scan, wire_type).is_err() {
                 break;
             }
         }
@@ -500,7 +502,7 @@ fn normalize_message_descriptor(
             }
             _ => {
                 let pre = cursor;
-                if skip_wire_value_simple(&mut cursor, wire_type).is_err() {
+                if skip_wire_value(&mut cursor, wire_type).is_err() {
                     return bytes.to_vec();
                 }
                 encode_key(tag, wire_type, &mut out);
@@ -558,7 +560,7 @@ fn extract_message_level_feature(bytes: &[u8], feature_field_tag: u32) -> Option
                 }
             }
             _ => {
-                if skip_wire_value_simple(&mut cursor, wire_type).is_err() {
+                if skip_wire_value(&mut cursor, wire_type).is_err() {
                     break;
                 }
             }
@@ -648,7 +650,7 @@ fn analyze_field(bytes: &[u8], parent_presence: i32, parent_encoding: i32) -> Fi
                 cursor = &cursor[len..];
             }
             _ => {
-                if skip_wire_value_simple(&mut cursor, wire_type).is_err() {
+                if skip_wire_value(&mut cursor, wire_type).is_err() {
                     break;
                 }
             }
@@ -739,7 +741,7 @@ fn normalize_field_descriptor_with_oneof(
             // Pass through other fields.
             _ => {
                 let pre = cursor;
-                if skip_wire_value_simple(&mut cursor, wire_type).is_err() {
+                if skip_wire_value(&mut cursor, wire_type).is_err() {
                     return bytes.to_vec();
                 }
                 encode_key(tag, wire_type, &mut out);
@@ -777,60 +779,11 @@ fn has_field_tag(bytes: &[u8], target_tag: u32) -> bool {
         if tag == target_tag {
             return true;
         }
-        if skip_wire_value_simple(&mut cursor, wire_type).is_err() {
+        if skip_wire_value(&mut cursor, wire_type).is_err() {
             return false;
         }
     }
     false
-}
-
-fn decode_len(cursor: &mut &[u8]) -> Result<usize, ()> {
-    let v = decode_varint(cursor).map_err(|_| ())?;
-    usize::try_from(v).map_err(|_| ())
-}
-
-fn skip_wire_value_simple(cursor: &mut &[u8], wire_type: WireType) -> Result<(), ()> {
-    match wire_type {
-        WireType::Varint => {
-            decode_varint(cursor).map_err(|_| ())?;
-            Ok(())
-        }
-        WireType::LengthDelimited => {
-            let len = decode_len(cursor)?;
-            if cursor.len() < len {
-                return Err(());
-            }
-            *cursor = &cursor[len..];
-            Ok(())
-        }
-        WireType::ThirtyTwoBit => {
-            if cursor.len() < 4 {
-                return Err(());
-            }
-            *cursor = &cursor[4..];
-            Ok(())
-        }
-        WireType::SixtyFourBit => {
-            if cursor.len() < 8 {
-                return Err(());
-            }
-            *cursor = &cursor[8..];
-            Ok(())
-        }
-        WireType::StartGroup => {
-            // Skip group contents until EndGroup.
-            loop {
-                let (inner_tag, inner_wt) = decode_key(cursor).map_err(|_| ())?;
-                if inner_wt == WireType::EndGroup {
-                    let _ = inner_tag;
-                    break;
-                }
-                skip_wire_value_simple(cursor, inner_wt)?;
-            }
-            Ok(())
-        }
-        WireType::EndGroup => Ok(()),
-    }
 }
 
 #[cfg(test)]

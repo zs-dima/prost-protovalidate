@@ -45,7 +45,10 @@ impl Evaluator for MapEval {
                     .evaluate_value_split(msg, &key_value, cfg, &key_path);
                 // Only direct (key-level) violations get "map.keys" rule prefix.
                 let direct = mark_key_violations(direct);
-                let direct = prepend_rule_prefix(direct, "map.keys");
+                let direct = prepend_rule_prefix(
+                    direct,
+                    prost_protovalidate_types::rules_meta::map::KEYS_RULE_PREFIX,
+                );
                 let nested = mark_key_violations(nested);
                 let (cont, new_acc) = error::merge_violations(acc, direct, cfg.fail_fast);
                 acc = new_acc;
@@ -66,7 +69,10 @@ impl Evaluator for MapEval {
                     .value_rules
                     .evaluate_value_split(msg, value, cfg, &val_path);
                 // Only direct (value-level) violations get "map.values" rule prefix.
-                let direct = prepend_rule_prefix(direct, "map.values");
+                let direct = prepend_rule_prefix(
+                    direct,
+                    prost_protovalidate_types::rules_meta::map::VALUES_RULE_PREFIX,
+                );
                 let (cont, new_acc) = error::merge_violations(acc, direct, cfg.fail_fast);
                 acc = new_acc;
                 if !cont {

@@ -4,6 +4,7 @@ use proc_macro2::{Ident, TokenStream};
 use prost_reflect::{DescriptorPool, FieldDescriptor, Kind};
 use quote::quote;
 
+use prost_protovalidate_types::rules_meta::repeated as meta;
 use prost_protovalidate_types::{Ignore, RepeatedRules};
 
 use crate::Error;
@@ -15,11 +16,12 @@ use crate::rules;
 fn emit_min_items_check(field_ident: &Ident, proto_name: &str, min: u64) -> TokenStream {
     #[allow(clippy::cast_possible_truncation)]
     let min_usize = min as usize;
-    let msg = format!("must have at least {min} items");
+    let rule_id = meta::MIN_ITEMS_ID;
+    let msg = meta::min_items_message(min);
     quote! {
         if self.#field_ident.len() < #min_usize {
             violations.push(::prost_protovalidate::Violation::new(
-                #proto_name, "repeated.min_items", #msg,
+                #proto_name, #rule_id, #msg,
             ));
         }
     }
@@ -29,11 +31,12 @@ fn emit_min_items_check(field_ident: &Ident, proto_name: &str, min: u64) -> Toke
 fn emit_max_items_check(field_ident: &Ident, proto_name: &str, max: u64) -> TokenStream {
     #[allow(clippy::cast_possible_truncation)]
     let max_usize = max as usize;
-    let msg = format!("must have at most {max} items");
+    let rule_id = meta::MAX_ITEMS_ID;
+    let msg = meta::max_items_message(max);
     quote! {
         if self.#field_ident.len() > #max_usize {
             violations.push(::prost_protovalidate::Violation::new(
-                #proto_name, "repeated.max_items", #msg,
+                #proto_name, #rule_id, #msg,
             ));
         }
     }
@@ -51,23 +54,20 @@ fn emit_canonical_bits_unique_check(
     field_ident: &Ident,
     proto_name: &str,
     bits_ty: &TokenStream,
-    zero_literal: &TokenStream,
+    canonical_fn: &TokenStream,
 ) -> TokenStream {
+    let rule_id = meta::UNIQUE_ID;
+    let msg = meta::UNIQUE_MESSAGE;
     quote! {
         {
             let mut _seen = ::std::collections::HashSet::<#bits_ty>::new();
             for item in &self.#field_ident {
-                if item.is_nan() {
+                let Some(_bits) = #canonical_fn(*item) else {
                     continue;
-                }
-                let _bits = if *item == #zero_literal {
-                    #zero_literal.to_bits()
-                } else {
-                    item.to_bits()
                 };
                 if !_seen.insert(_bits) {
                     violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, "repeated.unique", "items must be unique",
+                        #proto_name, #rule_id, #msg,
                     ));
                     break;
                 }
@@ -79,13 +79,15 @@ fn emit_canonical_bits_unique_check(
 /// Emit a generic `repeated.unique` check for `HashSet<&T>`-compatible
 /// scalar element kinds (bool, integer widths, string, bytes, enum).
 fn emit_generic_unique_check(field_ident: &Ident, proto_name: &str) -> TokenStream {
+    let rule_id = meta::UNIQUE_ID;
+    let msg = meta::UNIQUE_MESSAGE;
     quote! {
         {
             let mut _seen = ::std::collections::HashSet::new();
             for item in &self.#field_ident {
                 if !_seen.insert(item) {
                     violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, "repeated.unique", "items must be unique",
+                        #proto_name, #rule_id, #msg,
                     ));
                     break;
                 }
@@ -121,13 +123,13 @@ pub(crate) fn generate(
                 field_ident,
                 proto_name,
                 &quote!(u32),
-                &quote!(0.0_f32),
+                &quote!(::prost_protovalidate::types::rules_meta::float::canonical_f32_bits),
             ),
             Kind::Double => emit_canonical_bits_unique_check(
                 field_ident,
                 proto_name,
                 &quote!(u64),
-                &quote!(0.0_f64),
+                &quote!(::prost_protovalidate::types::rules_meta::float::canonical_f64_bits),
             ),
             _ => emit_generic_unique_check(field_ident, proto_name),
         };
@@ -185,6 +187,7 @@ pub(crate) fn generate(
                         }
                     };
 
+                    let items_prefix = meta::ITEMS_RULE_PREFIX;
                     checks.push(quote! {
                         for (_idx, _item) in self.#field_ident.iter().enumerate() {
                             let mut _local_violations: ::std::vec::Vec<
@@ -195,7 +198,7 @@ pub(crate) fn generate(
                             }
                             let _idx_u64: u64 = _idx as u64;
                             for mut _v in _local_violations {
-                                _v.prepend_rule_path("repeated.items");
+                                _v.prepend_rule_path(#items_prefix);
                                 _v.prepend_index(#proto_name, _idx_u64);
                                 violations.push(_v);
                             }

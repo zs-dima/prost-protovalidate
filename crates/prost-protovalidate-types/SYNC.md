@@ -27,6 +27,10 @@ committed file does not match the pinned ref.
 - Bump `PROTOVALIDATE_SCHEMA_REF` and `PROTOVALIDATE_TOOLS_VERSION` in the
   root `Makefile` together unless a deliberate split is required. The
   conformance harness binary (`PROTOVALIDATE_TOOLS_VERSION`) carries the
-  test corpus, and the hardcoded violation messages in
-  `crates/prost-protovalidate/src/validator/rules/` and
-  `crates/prost-protovalidate-build/src/rules/` must match the corpus.
+  test corpus.
+- Canonical violation rule ids and message text live in one place:
+  `src/rules_meta.rs` in this crate. Both the runtime evaluator and the
+  build-time code generator consume it, so a corpus bump that changes
+  message text is applied there once. The parity suite in
+  `crates/prost-protovalidate-tests` (including the descriptor-driven
+  sweep) then re-proves that both engines emit identical violations.

@@ -364,8 +364,8 @@ message HasUniqueFloats {
         "expected canonical-bits HashSet<u32> in generated code.\n\nGenerated:\n{generated}",
     );
     assert!(
-        generated.contains("to_bits"),
-        "expected canonical-bits `to_bits()` call.\n\nGenerated:\n{generated}",
+        generated.contains("canonical_f32_bits"),
+        "expected a call to the shared canonical-bits helper.\n\nGenerated:\n{generated}",
     );
 
     Ok(())

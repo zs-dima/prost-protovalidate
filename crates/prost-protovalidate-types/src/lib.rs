@@ -40,6 +40,8 @@
 )]
 mod proto;
 
+pub mod rules_meta;
+
 use std::sync::LazyLock;
 
 use prost::Message;

@@ -11,6 +11,21 @@ static FIELD_RULES_DESCRIPTOR: LazyLock<Option<MessageDescriptor>> = LazyLock::n
 });
 
 /// A single instance where a validation rule was not met.
+///
+/// # Construction conventions
+///
+/// Violations are built through one of three patterns, matching the upstream
+/// conformance corpus:
+///
+/// - [`Violation::new`] — the common case; sets `rule_path` equal to
+///   `rule_id` and carries a human-readable message.
+/// - [`Violation::new`] followed by the crate-internal `with_rule_path` —
+///   combined range rules (e.g. rule id `int32.gt_lt` with rule path
+///   `int32.gt`), where the id describes the bound combination but the path
+///   points at one concrete rule field.
+/// - [`Violation::new_constraint`] — well-known format rules (e.g. rule id
+///   `string.email_empty` with rule path `string.email`); the message is
+///   intentionally left empty per the conformance spec.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Violation {

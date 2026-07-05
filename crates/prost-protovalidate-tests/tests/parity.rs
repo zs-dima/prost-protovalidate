@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use pretty_assertions::assert_eq;
 use prost::Message;
-use prost_protovalidate::{Error, Validate, ValidationError, Validator, Violation};
+use prost_protovalidate::{Error, Validate, Validator, Violation};
 use prost_protovalidate_tests::parity::{
     self, AllNumericTypes, BytesContainsEmpty, BytesPatternRaw, BytesRuleMatrix, ConstInTest,
     DurationTimestampRules, EnumDefinedOnlyContainers, FieldMaskTest, FloatFiniteRules, Inner,
@@ -10,6 +10,7 @@ use prost_protovalidate_tests::parity::{
     ParityTest, PresenceMix, RepeatedFloatUnique, RepeatedScalarItems, RequiredImplicitScalar,
     StringRuleMatrix, StringWellKnown, TimestampRelative, VirtualOneof, VirtualOneofImplicitIgnore,
 };
+use prost_protovalidate_tests::sorted_violations;
 use prost_reflect::{DescriptorPool, DynamicMessage};
 
 static POOL: LazyLock<DescriptorPool> = LazyLock::new(|| {
@@ -27,30 +28,6 @@ fn validate_runtime(msg: &impl Message, type_name: &str) -> Result<(), Error> {
         .unwrap_or_else(|| panic!("message `{type_name}` not found in descriptor pool"));
     let dynamic = DynamicMessage::decode(desc, bytes.as_slice()).unwrap();
     VALIDATOR.validate(&dynamic)
-}
-
-/// A flattened violation tuple used for parity comparison.
-/// `for_key` is included so map-key violations correctly surface the runtime
-/// `for_key = true` marker — a real correctness contract, not cosmetic.
-type ViolationKey = (String, String, String, String, Option<bool>);
-
-/// Extract sorted violation tuples for comparison.
-fn sorted_violations(ve: &ValidationError) -> Vec<ViolationKey> {
-    let mut v: Vec<ViolationKey> = ve
-        .violations()
-        .iter()
-        .map(|v| {
-            (
-                v.field_path(),
-                v.rule_id().to_string(),
-                v.rule_path(),
-                v.message().to_string(),
-                v.for_key(),
-            )
-        })
-        .collect();
-    v.sort();
-    v
 }
 
 /// Assert both build-time `Validate` and runtime `Validator` succeed.
@@ -951,6 +928,15 @@ fn valid_duration_timestamp_rules() -> DurationTimestampRules {
         ts_range: Some(prost_types::Timestamp {
             seconds: 150,
             nanos: 0,
+        }),
+        // Nanos-tiebreaker bounds: gt {5s, 100n} / lt {100s, 500n}.
+        dur_nanos: Some(prost_types::Duration {
+            seconds: 5,
+            nanos: 200,
+        }),
+        ts_nanos: Some(prost_types::Timestamp {
+            seconds: 100,
+            nanos: 400,
         }),
     }
 }

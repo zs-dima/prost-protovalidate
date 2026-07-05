@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package parity;
 
+import "google/protobuf/any.proto";
 import "google/protobuf/duration.proto";
 import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
@@ -166,8 +167,9 @@ message BytesRuleMatrix {
   bytes not_in_list = 9 [(buf.validate.field).bytes = { not_in: ["nope"] }];
 }
 
-// Duration and Timestamp standard rules. `lt_now`/`gt_now`/`within` are
-// excluded by design — they route to runtime via the capability analyzer.
+// Duration and Timestamp static-bound rules. The time-relative rules
+// (`lt_now`/`gt_now`/`within`) are exercised separately by
+// `TimestampRelative` below — both engines read the wall clock for those.
 message DurationTimestampRules {
   google.protobuf.Duration  dur_const  = 1 [(buf.validate.field).duration.const = { seconds: 5 }];
   google.protobuf.Duration  dur_range  = 2 [(buf.validate.field).duration = {
@@ -178,6 +180,16 @@ message DurationTimestampRules {
   google.protobuf.Timestamp ts_range   = 4 [(buf.validate.field).timestamp = {
     gte: { seconds: 100 },
     lte: { seconds: 200 }
+  }];
+  // Nanos-bearing bounds: the (seconds, nanos) tuple comparison must use
+  // nanos as the tiebreaker on both engines.
+  google.protobuf.Duration  dur_nanos  = 5 [(buf.validate.field).duration.gt = {
+    seconds: 5,
+    nanos: 100
+  }];
+  google.protobuf.Timestamp ts_nanos   = 6 [(buf.validate.field).timestamp.lt = {
+    seconds: 100,
+    nanos: 500
   }];
 }
 
@@ -366,4 +378,27 @@ message RequiredImplicitScalar {
   bytes  forced_by = 4 [(buf.validate.field).required = true];
   // Enum: zero is the first declared value (`Status::Unspecified == 0`).
   Status forced_e  = 5 [(buf.validate.field).required = true];
+}
+
+// `any.in` / `any.not_in` on type_url. Regression guard for message-text
+// parity between the engines: the runtime emits "type URL must be in the
+// allow list" and generated code must match byte for byte.
+message AnyTypeUrl {
+  google.protobuf.Any allowed = 1 [(buf.validate.field).any = {
+    in: ["type.googleapis.com/google.protobuf.Duration"]
+  }];
+  google.protobuf.Any blocked = 2 [(buf.validate.field).any = {
+    not_in: ["type.googleapis.com/google.protobuf.Timestamp"]
+  }];
+}
+
+// Equal combined bounds: gte==lte is inclusive (exactly N), gt==lt is
+// exclusive (everything except N). Regression guard for the codegen-time
+// inclusive/exclusive selection in rules_meta::numeric::range_rule — the
+// pre-rules_meta generated code used a uniform strict `<` and accepted
+// every value for gte==lte.
+message EqualRangeBounds {
+  int32 exactly_five = 1 [(buf.validate.field).int32 = { gte: 5, lte: 5 }];
+  int32 never_five   = 2 [(buf.validate.field).int32 = { gt: 5, lt: 5 }];
+  float exactly_one  = 3 [(buf.validate.field).float = { gte: 1.0, lte: 1.0 }];
 }

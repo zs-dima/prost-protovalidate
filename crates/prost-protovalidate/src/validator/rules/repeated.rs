@@ -1,5 +1,8 @@
 use std::collections::HashSet;
 
+use prost_protovalidate_types::rules_meta::float as float_meta;
+use prost_protovalidate_types::rules_meta::repeated as meta;
+
 use crate::config::ValidationConfig;
 use crate::error::{Error, ValidationError};
 use crate::violation::Violation;
@@ -41,8 +44,8 @@ impl RepeatedRuleEval {
             if len < min {
                 violations.push(Violation::new(
                     "",
-                    "repeated.min_items",
-                    format!("must have at least {min} items"),
+                    meta::MIN_ITEMS_ID,
+                    meta::min_items_message(min),
                 ));
             }
         }
@@ -51,18 +54,14 @@ impl RepeatedRuleEval {
             if len > max {
                 violations.push(Violation::new(
                     "",
-                    "repeated.max_items",
-                    format!("must have at most {max} items"),
+                    meta::MAX_ITEMS_ID,
+                    meta::max_items_message(max),
                 ));
             }
         }
 
         if self.unique && !is_unique(list) {
-            violations.push(Violation::new(
-                "",
-                "repeated.unique",
-                "items must be unique",
-            ));
+            violations.push(Violation::new("", meta::UNIQUE_ID, meta::UNIQUE_MESSAGE));
         }
 
         if violations.is_empty() {
@@ -94,30 +93,6 @@ enum UniqueKeyExtraction {
     Unsupported,
 }
 
-fn canonical_f32_bits(value: f32) -> Option<u32> {
-    if value.is_nan() {
-        // NaN is not equal to itself, so multiple NaNs do not violate uniqueness.
-        return None;
-    }
-    Some(if value == 0.0 {
-        0.0_f32.to_bits()
-    } else {
-        value.to_bits()
-    })
-}
-
-fn canonical_f64_bits(value: f64) -> Option<u64> {
-    if value.is_nan() {
-        // NaN is not equal to itself, so multiple NaNs do not violate uniqueness.
-        return None;
-    }
-    Some(if value == 0.0 {
-        0.0_f64.to_bits()
-    } else {
-        value.to_bits()
-    })
-}
-
 fn unique_key(value: &prost_reflect::Value) -> UniqueKeyExtraction {
     match value {
         prost_reflect::Value::Bool(v) => UniqueKeyExtraction::Key(UniqueKey::Bool(*v)),
@@ -125,11 +100,11 @@ fn unique_key(value: &prost_reflect::Value) -> UniqueKeyExtraction {
         prost_reflect::Value::I64(v) => UniqueKeyExtraction::Key(UniqueKey::I64(*v)),
         prost_reflect::Value::U32(v) => UniqueKeyExtraction::Key(UniqueKey::U32(*v)),
         prost_reflect::Value::U64(v) => UniqueKeyExtraction::Key(UniqueKey::U64(*v)),
-        prost_reflect::Value::F32(v) => canonical_f32_bits(*v)
+        prost_reflect::Value::F32(v) => float_meta::canonical_f32_bits(*v)
             .map_or(UniqueKeyExtraction::AlwaysUnique, |bits| {
                 UniqueKeyExtraction::Key(UniqueKey::F32(bits))
             }),
-        prost_reflect::Value::F64(v) => canonical_f64_bits(*v)
+        prost_reflect::Value::F64(v) => float_meta::canonical_f64_bits(*v)
             .map_or(UniqueKeyExtraction::AlwaysUnique, |bits| {
                 UniqueKeyExtraction::Key(UniqueKey::F64(bits))
             }),

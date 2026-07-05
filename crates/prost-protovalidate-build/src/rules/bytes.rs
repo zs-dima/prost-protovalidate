@@ -3,6 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use prost_protovalidate_types::rules_meta::bytes as meta;
 use prost_protovalidate_types::{BytesRules, bytes_rules};
 
 #[allow(clippy::too_many_lines, clippy::cast_possible_truncation)]
@@ -16,11 +17,12 @@ pub(crate) fn generate(
     // Const — runtime formats `{c:?}` (Vec<u8> Debug, e.g. `[1, 2, 3]`).
     if let Some(ref c) = rules.r#const {
         let c_bytes = c.as_slice();
-        let msg = format!("value must be {c_bytes:?}");
+        let rule_id = meta::CONST_ID;
+        let msg = meta::const_message(c_bytes);
         checks.push(quote! {
             if #value_access.as_slice() != [#(#c_bytes),*] {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.const", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -29,11 +31,12 @@ pub(crate) fn generate(
     // Exact length — runtime message has no trailing " bytes".
     if let Some(len) = rules.len {
         let len_usize = len as usize;
-        let msg = format!("value length must be {len} bytes");
+        let rule_id = meta::LEN_ID;
+        let msg = meta::len_message(len);
         checks.push(quote! {
             if #value_access.len() != #len_usize {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.len", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -42,11 +45,12 @@ pub(crate) fn generate(
     // Min length
     if let Some(min) = rules.min_len {
         let min_usize = min as usize;
-        let msg = format!("value length must be at least {min} bytes");
+        let rule_id = meta::MIN_LEN_ID;
+        let msg = meta::min_len_message(min);
         checks.push(quote! {
             if #value_access.len() < #min_usize {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.min_len", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -55,11 +59,12 @@ pub(crate) fn generate(
     // Max length
     if let Some(max) = rules.max_len {
         let max_usize = max as usize;
-        let msg = format!("value length must be at most {max} bytes");
+        let rule_id = meta::MAX_LEN_ID;
+        let msg = meta::max_len_message(max);
         checks.push(quote! {
             if #value_access.len() > #max_usize {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.max_len", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -80,7 +85,8 @@ pub(crate) fn generate(
     // unreachable in practice; we prefer a loud panic over a silent
     // mismatch if the regex crate ever regresses.
     if let Some(ref pattern) = rules.pattern {
-        let msg = format!("value must match regex pattern `{pattern}`");
+        let rule_id = meta::PATTERN_ID;
+        let msg = meta::pattern_message(pattern);
         checks.push(quote! {
             {
                 static RE: ::std::sync::LazyLock<::prost_protovalidate::regex::Regex> =
@@ -91,12 +97,12 @@ pub(crate) fn generate(
                 if let Ok(s) = ::std::str::from_utf8(&#value_access) {
                     if !RE.is_match(s) {
                         violations.push(::prost_protovalidate::Violation::new(
-                            #proto_name, "bytes.pattern", #msg,
+                            #proto_name, #rule_id, #msg,
                         ));
                     }
                 } else {
                     violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, "bytes.pattern", #msg,
+                        #proto_name, #rule_id, #msg,
                     ));
                 }
             }
@@ -106,11 +112,12 @@ pub(crate) fn generate(
     // Prefix — runtime formats `{prefix:?}` (Vec<u8> Debug).
     if let Some(ref prefix) = rules.prefix {
         let prefix_bytes = prefix.as_slice();
-        let msg = format!("value does not have prefix {prefix_bytes:?}");
+        let rule_id = meta::PREFIX_ID;
+        let msg = meta::prefix_message(prefix_bytes);
         checks.push(quote! {
             if !#value_access.starts_with(&[#(#prefix_bytes),*]) {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.prefix", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -119,11 +126,12 @@ pub(crate) fn generate(
     // Suffix — runtime formats `{suffix:?}`.
     if let Some(ref suffix) = rules.suffix {
         let suffix_bytes = suffix.as_slice();
-        let msg = format!("value does not have suffix {suffix_bytes:?}");
+        let rule_id = meta::SUFFIX_ID;
+        let msg = meta::suffix_message(suffix_bytes);
         checks.push(quote! {
             if !#value_access.ends_with(&[#(#suffix_bytes),*]) {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.suffix", #msg,
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -137,11 +145,12 @@ pub(crate) fn generate(
         if !contains.is_empty() {
             let c_bytes = contains.as_slice();
             let c_len = c_bytes.len();
-            let msg = format!("value does not contain {c_bytes:?}");
+            let rule_id = meta::CONTAINS_ID;
+            let msg = meta::contains_message(c_bytes);
             checks.push(quote! {
                 if !#value_access.windows(#c_len).any(|w| w == [#(#c_bytes),*]) {
                     violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, "bytes.contains", #msg,
+                        #proto_name, #rule_id, #msg,
                     ));
                 }
             });
@@ -150,6 +159,8 @@ pub(crate) fn generate(
 
     // In
     if !rules.r#in.is_empty() {
+        let rule_id = meta::IN_ID;
+        let msg = meta::IN_MESSAGE;
         let vals: Vec<_> = rules
             .r#in
             .iter()
@@ -161,7 +172,7 @@ pub(crate) fn generate(
         checks.push(quote! {
             if ![#(#vals),*].contains(&#value_access.as_slice()) {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.in", "value must be in list",
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -169,6 +180,8 @@ pub(crate) fn generate(
 
     // Not-in
     if !rules.not_in.is_empty() {
+        let rule_id = meta::NOT_IN_ID;
+        let msg = meta::NOT_IN_MESSAGE;
         let vals: Vec<_> = rules
             .not_in
             .iter()
@@ -180,7 +193,7 @@ pub(crate) fn generate(
         checks.push(quote! {
             if [#(#vals),*].contains(&#value_access.as_slice()) {
                 violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.not_in", "value must not be in list",
+                    #proto_name, #rule_id, #msg,
                 ));
             }
         });
@@ -200,51 +213,58 @@ fn generate_well_known(
     value_access: &TokenStream,
     proto_name: &str,
 ) -> Vec<TokenStream> {
-    match wk {
-        bytes_rules::WellKnown::Ip(true) => vec![quote! {
-            if #value_access.is_empty() {
-                violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.ip_empty", "value is empty, which is not a valid IP address",
-                ));
-            } else if #value_access.len() != 4 && #value_access.len() != 16 {
-                violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.ip", "value must be a valid IP address",
-                ));
-            }
-        }],
-        bytes_rules::WellKnown::Ipv4(true) => vec![quote! {
-            if #value_access.is_empty() {
-                violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.ipv4_empty", "value is empty, which is not a valid IPv4 address",
-                ));
-            } else if #value_access.len() != 4 {
-                violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.ipv4", "value must be a valid IPv4 address",
-                ));
-            }
-        }],
-        bytes_rules::WellKnown::Ipv6(true) => vec![quote! {
-            if #value_access.is_empty() {
-                violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.ipv6_empty", "value is empty, which is not a valid IPv6 address",
-                ));
-            } else if #value_access.len() != 16 {
-                violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.ipv6", "value must be a valid IPv6 address",
-                ));
-            }
-        }],
-        bytes_rules::WellKnown::Uuid(true) => vec![quote! {
-            if #value_access.is_empty() {
-                violations.push(::prost_protovalidate::Violation::new_constraint(
-                    #proto_name, "bytes.uuid_empty", "bytes.uuid",
-                ));
-            } else if #value_access.len() != 16 {
-                violations.push(::prost_protovalidate::Violation::new(
-                    #proto_name, "bytes.uuid", "value must be a valid UUID",
-                ));
-            }
-        }],
-        _ => Vec::new(),
-    }
+    let (empty_id, empty_msg, id, msg, len_check) = match wk {
+        bytes_rules::WellKnown::Ip(true) => (
+            meta::IP_EMPTY_ID,
+            meta::IP_EMPTY_MESSAGE,
+            meta::IP_ID,
+            meta::IP_MESSAGE,
+            quote! { #value_access.len() != 4 && #value_access.len() != 16 },
+        ),
+        bytes_rules::WellKnown::Ipv4(true) => (
+            meta::IPV4_EMPTY_ID,
+            meta::IPV4_EMPTY_MESSAGE,
+            meta::IPV4_ID,
+            meta::IPV4_MESSAGE,
+            quote! { #value_access.len() != 4 },
+        ),
+        bytes_rules::WellKnown::Ipv6(true) => (
+            meta::IPV6_EMPTY_ID,
+            meta::IPV6_EMPTY_MESSAGE,
+            meta::IPV6_ID,
+            meta::IPV6_MESSAGE,
+            quote! { #value_access.len() != 16 },
+        ),
+        bytes_rules::WellKnown::Uuid(true) => {
+            // The empty variant is a constraint-style violation (no
+            // message, rule path `bytes.uuid`), unlike the other formats.
+            let empty_id = meta::UUID_EMPTY_ID;
+            let path = meta::UUID_ID;
+            let id = meta::UUID_ID;
+            let msg = meta::UUID_MESSAGE;
+            return vec![quote! {
+                if #value_access.is_empty() {
+                    violations.push(::prost_protovalidate::Violation::new_constraint(
+                        #proto_name, #empty_id, #path,
+                    ));
+                } else if #value_access.len() != 16 {
+                    violations.push(::prost_protovalidate::Violation::new(
+                        #proto_name, #id, #msg,
+                    ));
+                }
+            }];
+        }
+        _ => return Vec::new(),
+    };
+    vec![quote! {
+        if #value_access.is_empty() {
+            violations.push(::prost_protovalidate::Violation::new(
+                #proto_name, #empty_id, #empty_msg,
+            ));
+        } else if #len_check {
+            violations.push(::prost_protovalidate::Violation::new(
+                #proto_name, #id, #msg,
+            ));
+        }
+    }]
 }

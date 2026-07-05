@@ -78,11 +78,15 @@ fn default_proto_to_rust(proto_path: &str) -> TokenStream {
         let is_last = i == parts.len() - 1;
         let first_char_upper = part.chars().next().is_some_and(|c| c.is_ascii_uppercase());
 
-        // Non-last uppercase parts are nesting parents → `snake_case`
-        // Everything else keeps its original casing
+        // Non-last uppercase parts are nesting parents → `snake_case`.
+        // The last part is the type ident → prost's `UpperCamelCase` renaming
+        // (proto `UUID` becomes Rust `Uuid`). Package parts keep their casing.
         let ident = if !is_last && first_char_upper {
             let snake = to_snake_case(part);
             quote::format_ident!("{}", escape_keyword(&snake))
+        } else if is_last {
+            let camel = to_upper_camel_case(part);
+            quote::format_ident!("{}", escape_keyword(&camel))
         } else {
             quote::format_ident!("{}", escape_keyword(part))
         };
@@ -90,6 +94,25 @@ fn default_proto_to_rust(proto_path: &str) -> TokenStream {
     }
 
     tokens
+}
+
+/// Convert a proto message name to prost's Rust type ident casing.
+///
+/// Mirrors `prost-build` (`heck::ToUpperCamelCase`): acronym runs collapse
+/// (`UUID` → `Uuid`, `HTTPRule` → `HttpRule`), conventional `PascalCase`
+/// names pass through unchanged. Built on [`to_snake_case`] so acronym
+/// boundary handling stays identical in both directions.
+pub(crate) fn to_upper_camel_case(s: &str) -> String {
+    to_snake_case(s)
+        .split('_')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_ascii_uppercase().to_string() + chars.as_str()
+            })
+        })
+        .collect()
 }
 
 /// Convert `PascalCase` or `camelCase` to `snake_case`.
@@ -149,6 +172,44 @@ mod tests {
         assert_eq!(to_snake_case("XMLParser"), "xml_parser");
         assert_eq!(to_snake_case("simpleCase"), "simple_case");
         assert_eq!(to_snake_case("already_snake"), "already_snake");
+    }
+
+    #[test]
+    fn type_idents_mirror_prost_upper_camel_case() {
+        // prost-build renames message types to UpperCamelCase; generated
+        // impls must reference the renamed idents or they will not resolve.
+        assert_eq!(
+            default_proto_to_rust("core.v2.UUID").to_string(),
+            "core :: v2 :: Uuid"
+        );
+        assert_eq!(
+            default_proto_to_rust("auth.v2.AuthenticateRequest").to_string(),
+            "auth :: v2 :: AuthenticateRequest"
+        );
+        assert_eq!(
+            default_proto_to_rust("pkg.HTTPRule").to_string(),
+            "pkg :: HttpRule"
+        );
+        assert_eq!(
+            default_proto_to_rust("pkg.Outer.Inner").to_string(),
+            "pkg :: outer :: Inner"
+        );
+    }
+
+    #[test]
+    fn test_to_upper_camel_case() {
+        assert_eq!(to_upper_camel_case("UUID"), "Uuid");
+        assert_eq!(to_upper_camel_case("HTTPRule"), "HttpRule");
+        assert_eq!(
+            to_upper_camel_case("AuthenticateRequest"),
+            "AuthenticateRequest"
+        );
+        assert_eq!(to_upper_camel_case("already_snake"), "AlreadySnake");
+        assert_eq!(to_upper_camel_case("XMLParser"), "XmlParser");
+        // Digit boundaries mirror prost/heck: uppercase after a digit is a
+        // word start; lowercase after a digit is not.
+        assert_eq!(to_upper_camel_case("V2Ray"), "V2Ray");
+        assert_eq!(to_upper_camel_case("Foo2bar"), "Foo2bar");
     }
 
     #[test]

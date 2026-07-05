@@ -1,10 +1,7 @@
-use std::any::Any;
-use std::collections::{HashMap, HashSet};
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use prost::Message;
-use prost::encoding::{WireType, decode_key, decode_varint, encode_key, encode_varint};
 use prost_reflect::{
     DescriptorPool, DynamicMessage, ExtensionDescriptor, FieldDescriptor, MessageDescriptor,
     ReflectMessage, Value,
@@ -29,7 +26,7 @@ use super::evaluator::enum_check::DefinedEnumEval;
 use super::evaluator::field::{FieldEval, IgnoreMode};
 use super::evaluator::list::ListEval;
 use super::evaluator::map::MapEval;
-use super::evaluator::message::MessageEval;
+use super::evaluator::message::{MessageEval, MessageEvalState};
 use super::evaluator::oneof::{MessageOneofEval, OneofEval};
 use super::evaluator::value::ValueEval;
 use super::evaluator::wrapper::WrapperEval;
@@ -80,7 +77,8 @@ impl Builder {
         allow_unknown_fields: bool,
         additional_descriptor_sets: &[Vec<u8>],
     ) -> Self {
-        let (descriptor_pool, init_err) = build_descriptor_pool(additional_descriptor_sets);
+        let (descriptor_pool, init_err) =
+            super::descriptor_set::build_descriptor_pool(additional_descriptor_sets);
         Self {
             build_lock: Mutex::new(()),
             cache: RwLock::new(HashMap::new()),
@@ -96,11 +94,11 @@ impl Builder {
         let key = desc.full_name().to_string();
 
         if let Some(err) = &self.init_err {
-            let eval = Arc::new(MessageEval::new());
-            eval.set_err(CompilationError {
-                cause: err.cause.clone(),
-            });
-            return eval;
+            return Arc::new(MessageEval::from_state(MessageEvalState::with_err(
+                CompilationError {
+                    cause: err.cause.clone(),
+                },
+            )));
         }
 
         // Fast path
@@ -112,11 +110,11 @@ impl Builder {
         }
 
         if !self.lazy {
-            let eval = Arc::new(MessageEval::new());
-            eval.set_err(CompilationError {
-                cause: format!("no evaluator available for {key}"),
-            });
-            return eval;
+            return Arc::new(MessageEval::from_state(MessageEvalState::with_err(
+                CompilationError {
+                    cause: format!("no evaluator available for {key}"),
+                },
+            )));
         }
 
         // Slow path
@@ -172,53 +170,57 @@ impl Builder {
 
         let eval = Arc::new(MessageEval::new());
         cache.insert(key, Arc::clone(&eval));
-        self.build_message(desc, &eval, cache);
+        let state = self.build_message(desc, cache);
+        eval.init(state);
         eval
     }
 
     fn build_message(
         &self,
         desc: &MessageDescriptor,
-        msg_eval: &Arc<MessageEval>,
         cache: &mut HashMap<String, Arc<MessageEval>>,
-    ) {
+    ) -> MessageEvalState {
+        let mut state = MessageEvalState::default();
+
         let msg_rules = match desc.message_constraints() {
             Ok(rules) => rules,
             Err(err) => {
                 if self.allow_unknown_fields {
                     None
                 } else {
-                    msg_eval.set_err(CompilationError {
+                    state.set_err(CompilationError {
                         cause: format!(
                             "failed to resolve message rules for {}: {err}",
                             desc.full_name()
                         ),
                     });
-                    return;
+                    return state;
                 }
             }
         };
 
         if let Some(ref rules) = msg_rules {
-            if let Err(err) = Self::process_message_expressions(desc.full_name(), rules, msg_eval) {
-                msg_eval.set_err(err);
-                return;
+            if let Err(err) = Self::process_message_expressions(desc.full_name(), rules, &mut state)
+            {
+                state.set_err(err);
+                return state;
             }
-            Self::process_message_oneof_rules(desc, rules, msg_eval);
+            Self::process_message_oneof_rules(desc, rules, &mut state);
         }
 
-        if let Err(err) = Self::process_oneof_rules(desc, msg_eval) {
-            msg_eval.set_err(err);
-            return;
+        if let Err(err) = Self::process_oneof_rules(desc, &mut state) {
+            state.set_err(err);
+            return state;
         }
-        self.process_fields(desc, msg_rules.as_ref(), msg_eval, cache);
+        self.process_fields(desc, msg_rules.as_ref(), &mut state, cache);
+        state
     }
 
     #[cfg(feature = "cel")]
     fn process_message_expressions(
         _full_name: &str,
         msg_rules: &MessageRules,
-        msg_eval: &Arc<MessageEval>,
+        state: &mut MessageEvalState,
     ) -> Result<(), CompilationError> {
         let programs = compile_programs(
             &msg_rules.cel_expression,
@@ -228,7 +230,7 @@ impl Builder {
             CelViolationMode::MessageRule,
         )?;
         if !programs.is_empty() {
-            msg_eval.append(Box::new(CelMessageEval { programs }));
+            state.append(Box::new(CelMessageEval { programs }));
         }
         Ok(())
     }
@@ -237,7 +239,7 @@ impl Builder {
     fn process_message_expressions(
         full_name: &str,
         msg_rules: &MessageRules,
-        _msg_eval: &Arc<MessageEval>,
+        _state: &mut MessageEvalState,
     ) -> Result<(), CompilationError> {
         if !msg_rules.cel_expression.is_empty() || !msg_rules.cel.is_empty() {
             return Err(CompilationError {
@@ -254,11 +256,11 @@ impl Builder {
     fn process_message_oneof_rules(
         desc: &MessageDescriptor,
         msg_rules: &MessageRules,
-        msg_eval: &Arc<MessageEval>,
+        state: &mut MessageEvalState,
     ) {
         for rule in &msg_rules.oneof {
             if rule.fields.is_empty() {
-                msg_eval.set_err(CompilationError {
+                state.set_err(CompilationError {
                     cause: format!(
                         "at least one field must be specified in oneof rule for message {}",
                         desc.full_name()
@@ -270,7 +272,7 @@ impl Builder {
             let mut seen = std::collections::HashSet::new();
             for name in &rule.fields {
                 if !seen.insert(name.as_str()) {
-                    msg_eval.set_err(CompilationError {
+                    state.set_err(CompilationError {
                         cause: format!(
                             "duplicate {name} in oneof rule for message {}",
                             desc.full_name()
@@ -279,14 +281,14 @@ impl Builder {
                     return;
                 }
                 if desc.get_field_by_name(name).is_none() {
-                    msg_eval.set_err(CompilationError {
+                    state.set_err(CompilationError {
                         cause: format!("field {name} not found in message {}", desc.full_name()),
                     });
                     return;
                 }
             }
 
-            msg_eval.append_nested(Box::new(MessageOneofEval {
+            state.append_nested(Box::new(MessageOneofEval {
                 field_names: rule.fields.clone(),
                 required: rule.required.unwrap_or(false),
             }));
@@ -295,7 +297,7 @@ impl Builder {
 
     fn process_oneof_rules(
         desc: &MessageDescriptor,
-        msg_eval: &Arc<MessageEval>,
+        state: &mut MessageEvalState,
     ) -> Result<(), CompilationError> {
         for oneof in desc.oneofs() {
             if oneof.is_synthetic() {
@@ -308,7 +310,7 @@ impl Builder {
                     oneof.name()
                 ),
             })?;
-            msg_eval.append_nested(Box::new(OneofEval {
+            state.append_nested(Box::new(OneofEval {
                 descriptor: oneof.clone(),
                 required,
             }));
@@ -320,7 +322,7 @@ impl Builder {
         &self,
         desc: &MessageDescriptor,
         msg_rules: Option<&MessageRules>,
-        msg_eval: &Arc<MessageEval>,
+        state: &mut MessageEvalState,
         cache: &mut HashMap<String, Arc<MessageEval>>,
     ) {
         for field in desc.fields() {
@@ -335,7 +337,7 @@ impl Builder {
                         ignore: IgnoreMode::Unspecified,
                         err: Some(err),
                     };
-                    msg_eval.append_nested(Box::new(fld_eval));
+                    state.append_nested(Box::new(fld_eval));
                     continue;
                 }
             };
@@ -359,7 +361,7 @@ impl Builder {
                                 ),
                             }),
                         };
-                        msg_eval.append_nested(Box::new(fld_eval));
+                        state.append_nested(Box::new(fld_eval));
                         continue;
                     }
                 }
@@ -371,7 +373,7 @@ impl Builder {
                 msg_rules,
                 cache,
             );
-            msg_eval.append_nested(Box::new(fld_eval));
+            state.append_nested(Box::new(fld_eval));
         }
     }
 
@@ -1114,218 +1116,6 @@ fn is_part_of_message_oneof(msg_rules: Option<&MessageRules>, field: &FieldDescr
         .any(|oneof| oneof.fields.iter().any(|f| f == field_name))
 }
 
-fn build_descriptor_pool(
-    additional_descriptor_sets: &[Vec<u8>],
-) -> (DescriptorPool, Option<CompilationError>) {
-    let base_bytes = prost_protovalidate_types::DESCRIPTOR_POOL.encode_to_vec();
-    let base_entries = match parse_file_descriptor_set_entries(base_bytes.as_slice()) {
-        Ok(entries) => entries,
-        Err(err) => {
-            return (
-                prost_protovalidate_types::DESCRIPTOR_POOL.clone(),
-                Some(CompilationError {
-                    cause: format!("failed to decode built-in descriptor set: {err}"),
-                }),
-            );
-        }
-    };
-
-    let mut seen_names: HashSet<String> =
-        base_entries.iter().map(|(name, _)| name.clone()).collect();
-    let mut combined_files: Vec<Vec<u8>> =
-        base_entries.into_iter().map(|(_, bytes)| bytes).collect();
-    let mut parsed_additional: Vec<Vec<(String, Vec<u8>)>> =
-        Vec::with_capacity(additional_descriptor_sets.len());
-
-    for (idx, bytes) in additional_descriptor_sets.iter().enumerate() {
-        let entries = match parse_file_descriptor_set_entries(bytes.as_slice()) {
-            Ok(entries) => entries,
-            Err(err) => {
-                return (
-                    prost_protovalidate_types::DESCRIPTOR_POOL.clone(),
-                    Some(CompilationError {
-                        cause: format!(
-                            "failed to decode additional descriptor set at index {idx}: {err}"
-                        ),
-                    }),
-                );
-            }
-        };
-
-        for (name, file_bytes) in &entries {
-            if seen_names.insert(name.clone()) {
-                combined_files.push(file_bytes.clone());
-            }
-        }
-        parsed_additional.push(entries);
-    }
-
-    let combined_bytes = encode_file_descriptor_set(&combined_files);
-    let combined_bytes = super::editions::normalize_edition_descriptor_set(&combined_bytes);
-    match decode_pool_from_bytes(combined_bytes.as_slice()) {
-        Ok(pool) => (pool, None),
-        Err(err) => {
-            // Keep index-oriented diagnostics without decoding into a non-empty pool.
-            let mut prefix_seen: HashSet<String> = HashSet::new();
-            let mut prefix_files = Vec::new();
-            for (name, file_bytes) in
-                parse_file_descriptor_set_entries(base_bytes.as_slice()).unwrap_or_default()
-            {
-                if prefix_seen.insert(name) {
-                    prefix_files.push(file_bytes);
-                }
-            }
-
-            for (idx, entries) in parsed_additional.iter().enumerate() {
-                for (name, file_bytes) in entries {
-                    if prefix_seen.insert(name.clone()) {
-                        prefix_files.push(file_bytes.clone());
-                    }
-                }
-                let prefix_bytes = encode_file_descriptor_set(&prefix_files);
-                if let Err(prefix_err) = decode_pool_from_bytes(prefix_bytes.as_slice()) {
-                    return (
-                        prost_protovalidate_types::DESCRIPTOR_POOL.clone(),
-                        Some(CompilationError {
-                            cause: format!(
-                                "failed to decode additional descriptor set at index {idx}: {prefix_err}"
-                            ),
-                        }),
-                    );
-                }
-            }
-
-            (
-                prost_protovalidate_types::DESCRIPTOR_POOL.clone(),
-                Some(CompilationError {
-                    cause: format!(
-                        "failed to decode additional descriptor sets (indices 0..{}): {err}",
-                        additional_descriptor_sets.len()
-                    ),
-                }),
-            )
-        }
-    }
-}
-
-fn decode_pool_from_bytes(bytes: &[u8]) -> Result<DescriptorPool, String> {
-    let mut pool = DescriptorPool::new();
-    match catch_unwind(AssertUnwindSafe(|| pool.decode_file_descriptor_set(bytes))) {
-        Ok(Ok(())) => Ok(pool),
-        Ok(Err(err)) => Err(err.to_string()),
-        Err(panic) => Err(format!(
-            "panic during descriptor pool decode: {}",
-            panic_message(&panic)
-        )),
-    }
-}
-
-fn parse_file_descriptor_set_entries(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
-    let mut cursor = bytes;
-    let mut entries = Vec::new();
-
-    while !cursor.is_empty() {
-        let (tag, wire_type) = decode_key(&mut cursor).map_err(|err| err.to_string())?;
-        match (tag, wire_type) {
-            (1, WireType::LengthDelimited) => {
-                let len = decode_len(&mut cursor)?;
-                if cursor.len() < len {
-                    return Err("truncated file descriptor entry".to_string());
-                }
-
-                let entry = cursor[..len].to_vec();
-                cursor = &cursor[len..];
-                let name = parse_file_descriptor_name(entry.as_slice())?;
-                entries.push((name, entry));
-            }
-            _ => skip_wire_value(&mut cursor, wire_type)?,
-        }
-    }
-
-    Ok(entries)
-}
-
-fn parse_file_descriptor_name(bytes: &[u8]) -> Result<String, String> {
-    let mut cursor = bytes;
-    while !cursor.is_empty() {
-        let (tag, wire_type) = decode_key(&mut cursor).map_err(|err| err.to_string())?;
-        match (tag, wire_type) {
-            (1, WireType::LengthDelimited) => {
-                let len = decode_len(&mut cursor)?;
-                if cursor.len() < len {
-                    return Err("truncated file descriptor name".to_string());
-                }
-
-                let name = std::str::from_utf8(&cursor[..len])
-                    .map_err(|err| format!("invalid UTF-8 in file descriptor name: {err}"))?;
-                return Ok(name.to_string());
-            }
-            _ => skip_wire_value(&mut cursor, wire_type)?,
-        }
-    }
-
-    Err("missing file name in file descriptor".to_string())
-}
-
-fn encode_file_descriptor_set(files: &[Vec<u8>]) -> Vec<u8> {
-    let mut out = Vec::new();
-    for file in files {
-        encode_key(1, WireType::LengthDelimited, &mut out);
-        encode_varint(file.len() as u64, &mut out);
-        out.extend_from_slice(file);
-    }
-    out
-}
-
-fn decode_len(cursor: &mut &[u8]) -> Result<usize, String> {
-    let len_u64 = decode_varint(cursor).map_err(|err| err.to_string())?;
-    usize::try_from(len_u64).map_err(|_| "length does not fit in usize".to_string())
-}
-
-fn skip_wire_value(cursor: &mut &[u8], wire_type: WireType) -> Result<(), String> {
-    match wire_type {
-        WireType::Varint => {
-            decode_varint(cursor).map_err(|err| err.to_string())?;
-            Ok(())
-        }
-        WireType::LengthDelimited => {
-            let len = decode_len(cursor)?;
-            if cursor.len() < len {
-                return Err("truncated length-delimited field".to_string());
-            }
-            *cursor = &cursor[len..];
-            Ok(())
-        }
-        WireType::ThirtyTwoBit => {
-            if cursor.len() < 4 {
-                return Err("truncated 32-bit field".to_string());
-            }
-            *cursor = &cursor[4..];
-            Ok(())
-        }
-        WireType::SixtyFourBit => {
-            if cursor.len() < 8 {
-                return Err("truncated 64-bit field".to_string());
-            }
-            *cursor = &cursor[8..];
-            Ok(())
-        }
-        WireType::StartGroup | WireType::EndGroup => {
-            Err("group wire types are not supported".to_string())
-        }
-    }
-}
-
-fn panic_message(panic: &(dyn Any + Send)) -> String {
-    if let Some(s) = panic.downcast_ref::<&str>() {
-        (*s).to_string()
-    } else if let Some(s) = panic.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "unknown panic".to_string()
-    }
-}
-
 fn active_rule_message(
     field_rules_dynamic: Option<&DynamicMessage>,
 ) -> Option<(FieldDescriptor, DynamicMessage)> {
@@ -1681,10 +1471,11 @@ mod tests {
             .as_message()
             .cloned()
             .expect("field should reference message descriptor");
-        let nested_eval = Arc::new(MessageEval::new());
-        nested_eval.set_err(CompilationError {
-            cause: "nested compile failure".to_string(),
-        });
+        let nested_eval = Arc::new(MessageEval::from_state(MessageEvalState::with_err(
+            CompilationError {
+                cause: "nested compile failure".to_string(),
+            },
+        )));
 
         let mut cache = HashMap::new();
         cache.insert(nested_desc.full_name().to_string(), nested_eval);

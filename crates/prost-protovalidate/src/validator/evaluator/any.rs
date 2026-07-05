@@ -2,6 +2,8 @@ use std::collections::HashSet;
 
 use prost_reflect::DynamicMessage;
 
+use prost_protovalidate_types::rules_meta::any as meta;
+
 use crate::config::ValidationConfig;
 use crate::error::{Error, ValidationError};
 use crate::violation::Violation;
@@ -41,19 +43,16 @@ impl Evaluator for AnyEval {
         };
 
         if !self.r#in.is_empty() && !self.r#in.contains(&type_url) {
-            return Err(ValidationError::single(Violation::new(
-                "",
-                "any.in",
-                "type URL must be in the allow list",
-            ))
-            .into());
+            return Err(
+                ValidationError::single(Violation::new("", meta::IN_ID, meta::IN_MESSAGE)).into(),
+            );
         }
 
         if self.not_in.contains(&type_url) {
             return Err(ValidationError::single(Violation::new(
                 "",
-                "any.not_in",
-                "type URL must not be in the block list",
+                meta::NOT_IN_ID,
+                meta::NOT_IN_MESSAGE,
             ))
             .into());
         }

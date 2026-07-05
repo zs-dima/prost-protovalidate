@@ -1,3 +1,5 @@
+use prost_protovalidate_types::rules_meta::boolean as meta;
+
 use crate::config::ValidationConfig;
 use crate::error::{Error, ValidationError};
 use crate::violation::Violation;
@@ -30,8 +32,8 @@ impl BoolRuleEval {
             if v != c {
                 return Err(ValidationError::single(Violation::new(
                     "",
-                    "bool.const",
-                    format!("must equal {c}"),
+                    meta::CONST_ID,
+                    meta::const_message(c),
                 ))
                 .into());
             }

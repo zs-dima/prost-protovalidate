@@ -5,7 +5,7 @@
 //! validation code (from `prost-protovalidate-build`) can call them directly
 //! without reimplementing the validation logic.
 
-use crate::validator::rules::string as internal;
+use crate::validator::formats as internal;
 
 /// Returns `true` if `s` is a valid email address.
 ///
@@ -35,7 +35,7 @@ pub fn is_ip(s: &str) -> bool {
 #[inline]
 #[must_use]
 pub fn is_ipv4(s: &str) -> bool {
-    s.parse::<std::net::Ipv4Addr>().is_ok()
+    internal::is_ipv4_strict(s)
 }
 
 /// Returns `true` if `s` is a valid IPv6 address (including zone IDs).

@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use cel::common::ast::{EntryExpr, Expr, IdedExpr};
 use cel::extractors::{Arguments, This};
@@ -15,7 +15,7 @@ use crate::config::ValidationConfig;
 use crate::error::{CompilationError, Error, RuntimeError, ValidationError};
 use crate::violation::Violation;
 
-use super::super::rules::string as string_rules;
+use super::super::formats;
 use super::{Evaluator, MessageEvaluator};
 
 /// Dotted field paths used by `has(...)` in a compiled CEL program, rooted at
@@ -239,7 +239,10 @@ impl CelRuleProgram {
         this: CelValue,
         cfg: &ValidationConfig,
     ) -> Result<Option<Violation>, Error> {
-        let mut ctx = build_cel_context();
+        // Per-evaluation variables go into a child scope of the shared base
+        // context, so the ~40 builtin and custom function registrations are
+        // paid once per process instead of once per program execution.
+        let mut ctx = BASE_CONTEXT.new_inner_scope();
         ctx.add_variable_from_value("this", this);
 
         if self.references_now {
@@ -332,6 +335,12 @@ impl CelRuleProgram {
         violation
     }
 }
+
+/// Shared root context: CEL builtins plus the protovalidate function set.
+/// Evaluations bind their variables (`this`, `now`, `rule`, `rules`) in a
+/// child scope; none of these exist in the root, so lookup semantics match a
+/// freshly built context.
+static BASE_CONTEXT: LazyLock<Context<'static>> = LazyLock::new(build_cel_context);
 
 fn build_cel_context() -> Context<'static> {
     let mut ctx = Context::default();
@@ -483,11 +492,11 @@ fn cel_is_inf(
 }
 
 fn cel_is_hostname(This(value): This<Arc<String>>) -> bool {
-    string_rules::is_hostname(value.as_ref())
+    formats::is_hostname(value.as_ref())
 }
 
 fn cel_is_email(This(value): This<Arc<String>>) -> bool {
-    string_rules::is_email(value.as_ref())
+    formats::is_email(value.as_ref())
 }
 
 fn cel_is_ip(
@@ -497,8 +506,8 @@ fn cel_is_ip(
 ) -> Result<bool, CelExecutionError> {
     let tail = call_args_without_this(ftx, args.as_slice())?;
     match tail {
-        [] => Ok(string_rules::is_ip_with_version(value.as_ref(), 0)),
-        [CelValue::Int(version)] => Ok(string_rules::is_ip_with_version(value.as_ref(), *version)),
+        [] => Ok(formats::is_ip_with_version(value.as_ref(), 0)),
+        [CelValue::Int(version)] => Ok(formats::is_ip_with_version(value.as_ref(), *version)),
         _ => Err(CelExecutionError::NoSuchOverload),
     }
 }
@@ -510,38 +519,36 @@ fn cel_is_ip_prefix(
 ) -> Result<bool, CelExecutionError> {
     let tail = call_args_without_this(ftx, args.as_slice())?;
     match tail {
-        [] => Ok(string_rules::is_ip_prefix_with_options(
-            value.as_ref(),
-            0,
-            false,
-        )),
-        [CelValue::Int(version)] => Ok(string_rules::is_ip_prefix_with_options(
+        [] => Ok(formats::is_ip_prefix_with_options(value.as_ref(), 0, false)),
+        [CelValue::Int(version)] => Ok(formats::is_ip_prefix_with_options(
             value.as_ref(),
             *version,
             false,
         )),
-        [CelValue::Bool(strict)] => Ok(string_rules::is_ip_prefix_with_options(
+        [CelValue::Bool(strict)] => Ok(formats::is_ip_prefix_with_options(
             value.as_ref(),
             0,
             *strict,
         )),
-        [CelValue::Int(version), CelValue::Bool(strict)] => Ok(
-            string_rules::is_ip_prefix_with_options(value.as_ref(), *version, *strict),
-        ),
+        [CelValue::Int(version), CelValue::Bool(strict)] => Ok(formats::is_ip_prefix_with_options(
+            value.as_ref(),
+            *version,
+            *strict,
+        )),
         _ => Err(CelExecutionError::NoSuchOverload),
     }
 }
 
 fn cel_is_uri(This(value): This<Arc<String>>) -> bool {
-    string_rules::is_uri(value.as_ref())
+    formats::is_uri(value.as_ref())
 }
 
 fn cel_is_uri_ref(This(value): This<Arc<String>>) -> bool {
-    string_rules::is_uri_ref(value.as_ref())
+    formats::is_uri_ref(value.as_ref())
 }
 
 fn cel_is_host_and_port(This(value): This<Arc<String>>, port_required: bool) -> bool {
-    string_rules::is_host_and_port(value.as_ref(), port_required)
+    formats::is_host_and_port(value.as_ref(), port_required)
 }
 
 fn cel_starts_with(
