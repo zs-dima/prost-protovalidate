@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-07-06
+
+### Added
+
+- **`prost_protovalidate_types::rules_meta`** — new public module centralizing
+  the canonical `buf.validate` rule ids, violation-message templates, and
+  range-combination tables. Single source of truth consumed by both the runtime
+  `Validator` and the `prost-protovalidate-build` code generator, so the two
+  engines can no longer drift on rule ids or messages.
+
+### Changed
+
+- Runtime validator internals now source rule ids/messages from `rules_meta`
+  instead of hardcoding them across `validator/rules/*`; format validators were
+  extracted into `validator/formats` and descriptor/wire helpers into
+  `validator/descriptor_set` + `validator/wire`. No public API or behavior
+  change — full conformance retained (2854/2854).
+- `prost-protovalidate-build` codegen now emits rule ids/messages from the same
+  `rules_meta` tables the runtime uses, guaranteeing parity by construction.
+- `prost-protovalidate-build` dependency footprint trimmed: `prost-build` and
+  `prost-reflect-build` moved from `[dependencies]` to `[dev-dependencies]`
+  (used only by the crate's own tests). Downstream `build.rs` consumers no
+  longer pull them transitively.
+
 ## [0.4.2] - 2026-05-22
 
 ### Fixed
@@ -116,6 +140,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-call validation options (`FailFast`, `Filter`, `NowFn`).
 - Validator construction options (`DisableLazy`, `AdditionalDescriptorSetBytes`, `MessageDescriptors`).
 
+[Unreleased]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.2...v0.4.3
+[0.4.2]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.1...v0.4.2
+[0.4.1]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/zs-dima/prost-protovalidate/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/zs-dima/prost-protovalidate/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/zs-dima/prost-protovalidate/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/zs-dima/prost-protovalidate/releases/tag/v0.1.0

@@ -806,7 +806,7 @@ dependencies = [
 
 [[package]]
 name = "prost-protovalidate"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "cel",
  "chrono",
@@ -828,7 +828,7 @@ dependencies = [
 
 [[package]]
 name = "prost-protovalidate-build"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -845,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "prost-protovalidate-conformance"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "prost",
  "prost-build",
@@ -857,7 +857,7 @@ dependencies = [
 
 [[package]]
 name = "prost-protovalidate-tests"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "pretty_assertions",
  "prost",
@@ -871,7 +871,7 @@ dependencies = [
 
 [[package]]
 name = "prost-protovalidate-types"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "pretty_assertions",
  "prost",
