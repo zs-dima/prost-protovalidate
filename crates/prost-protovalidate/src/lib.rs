@@ -73,6 +73,13 @@
 //! so consumers do not need to depend on it directly.
 
 #![warn(missing_docs)]
+// The crate docs and `time` module link to reflection-only items
+// (`Validator`, `validate`, `ValidatorOption`, `ValidationOption`, and the
+// `Violation` enrichment accessors) that are `#[cfg(feature = "reflect")]`.
+// Under `--no-default-features` those links have no target; allow the broken
+// intra-doc link lint in that configuration only. The default/all-features
+// docs (docs.rs) still lint every link.
+#![cfg_attr(not(feature = "reflect"), allow(rustdoc::broken_intra_doc_links))]
 
 #[cfg(feature = "reflect")]
 mod config;
