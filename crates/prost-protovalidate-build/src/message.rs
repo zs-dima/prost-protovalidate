@@ -10,12 +10,13 @@ use quote::quote;
 use prost_protovalidate_types::MessageRules;
 
 use crate::Error;
-use crate::naming;
+use crate::naming::NamingContext;
 
 /// Generate message-level validation checks (virtual oneofs).
 pub(crate) fn generate_message_checks(
     msg: &MessageDescriptor,
     msg_rules: Option<&MessageRules>,
+    naming: &NamingContext,
 ) -> Vec<TokenStream> {
     let Some(rules) = msg_rules else {
         return Vec::new();
@@ -35,13 +36,14 @@ pub(crate) fn generate_message_checks(
         // Generate field presence checks
         let mut count_stmts = Vec::new();
         for field_name in fields {
-            let rust_name = naming::field_to_rust_name(field_name);
-            let field_ident = quote::format_ident!("{}", rust_name);
+            let field_ident = naming.field_ident(field_name);
 
-            // Pick the right presence test for the underlying prost storage:
+            // Pick the right presence test for the underlying storage:
             //   * lists/maps → `Vec`/`HashMap` → non-empty
-            //   * `supports_presence()` (proto3 `optional`, message fields,
-            //     synthetic-oneof members) → prost stores `Option<T>` →
+            //   * message fields → backend presence (`Option<T>` /
+            //     `MessageField<T>`)
+            //   * presence-having scalars (proto3 `optional`,
+            //     synthetic-oneof members) → `Option<T>` in both backends →
             //     `is_some()`
             //   * everything else is a bare proto3 scalar (`Cardinality::Optional`
             //     in the descriptor is implicit presence, NOT `Option<T>` in
@@ -51,13 +53,23 @@ pub(crate) fn generate_message_checks(
                     count_stmts.push(quote! {
                         if !self.#field_ident.is_empty() { _oneof_count += 1; }
                     });
+                } else if field_desc.kind().as_message().is_some() {
+                    let is_set = naming
+                        .backend()
+                        .msg_field_is_set(&quote! { self.#field_ident });
+                    count_stmts.push(quote! {
+                        if #is_set { _oneof_count += 1; }
+                    });
                 } else if field_desc.supports_presence() {
                     count_stmts.push(quote! {
                         if self.#field_ident.is_some() { _oneof_count += 1; }
                     });
                 } else {
-                    let default_check =
-                        crate::codegen::generate_default_check(&field_desc, &field_ident);
+                    let default_check = crate::codegen::generate_default_check(
+                        &field_desc,
+                        &field_ident,
+                        naming.backend(),
+                    );
                     count_stmts.push(quote! {
                         if #default_check { _oneof_count += 1; }
                     });
@@ -106,6 +118,7 @@ pub(crate) fn generate_message_checks(
 pub(crate) fn generate_oneof_checks(
     msg: &MessageDescriptor,
     pool: &DescriptorPool,
+    naming: &NamingContext,
 ) -> Result<Vec<TokenStream>, Error> {
     let mut checks = Vec::new();
 
@@ -122,11 +135,10 @@ pub(crate) fn generate_oneof_checks(
         }
 
         let oneof_name = oneof.name().to_string();
-        let rust_name = naming::field_to_rust_name(&oneof_name);
-        let field_ident = quote::format_ident!("{}", rust_name);
+        let field_ident = naming.field_ident(&oneof_name);
         let msg_text = format!("{oneof_name} is required");
 
-        // Real oneofs in prost are represented as Option<OneofEnum>
+        // Real oneofs are `Option<OneofEnum>` in both prost and buffa.
         checks.push(quote! {
             if self.#field_ident.is_none() {
                 violations.push(::prost_protovalidate::Violation::new(

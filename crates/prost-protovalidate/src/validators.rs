@@ -5,7 +5,7 @@
 //! validation code (from `prost-protovalidate-build`) can call them directly
 //! without reimplementing the validation logic.
 
-use crate::validator::formats as internal;
+use crate::formats as internal;
 
 /// Returns `true` if `s` is a valid email address.
 ///

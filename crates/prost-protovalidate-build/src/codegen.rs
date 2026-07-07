@@ -18,7 +18,7 @@ use prost_protovalidate_types::{FieldRules, Ignore, MessageRules, field_rules};
 
 use crate::Error;
 use crate::message;
-use crate::naming::{self, NamingContext};
+use crate::naming::NamingContext;
 use crate::rules;
 
 /// Decode a `buf.validate` extension from options using a pool-local descriptor.
@@ -70,14 +70,23 @@ pub(crate) fn resolve_oneof_required(
 }
 
 /// Generate all `impl Validate` blocks for messages in the descriptor pool.
-pub(crate) fn generate(pool: &DescriptorPool, naming: &NamingContext) -> TokenStream {
+///
+/// With `fail_on_runtime_only`, any message the generator would route to the
+/// runtime validator (or fail to generate) aborts code generation instead of
+/// being skipped with a warning.
+pub(crate) fn generate(
+    pool: &DescriptorPool,
+    naming: &NamingContext,
+    fail_on_runtime_only: bool,
+) -> Result<TokenStream, Error> {
     let mut output = TokenStream::new();
     let mut analyzer = CapabilityAnalyzer::new(pool, naming);
 
     for message in pool.all_messages() {
-        match generate_message(pool, &message, naming, &mut analyzer) {
+        match generate_message(pool, &message, naming, &mut analyzer, fail_on_runtime_only) {
             Ok(Some(tokens)) => output.extend(tokens),
             Ok(None) => {}
+            Err(e) if fail_on_runtime_only => return Err(e),
             Err(e) => {
                 let name = message.full_name();
                 println!("cargo:warning=prost-protovalidate-build: skipping {name}: {e:?}");
@@ -85,7 +94,7 @@ pub(crate) fn generate(pool: &DescriptorPool, naming: &NamingContext) -> TokenSt
         }
     }
 
-    output
+    Ok(output)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,10 +110,14 @@ fn generate_message(
     msg: &MessageDescriptor,
     naming: &NamingContext,
     analyzer: &mut CapabilityAnalyzer<'_>,
+    fail_on_runtime_only: bool,
 ) -> Result<Option<TokenStream>, Error> {
     match analyzer.capability_for(msg)? {
         MessageCapability::NoRules => return Ok(None),
         MessageCapability::RuntimeOnly(reason) => {
+            if fail_on_runtime_only {
+                return Err(Error::RuntimeOnly(reason));
+            }
             println!(
                 "cargo:warning=prost-protovalidate-build: {reason} ; use runtime Validator instead"
             );
@@ -134,16 +147,16 @@ fn generate_message(
     }
 
     // Generate message-level checks (virtual oneofs)
-    let msg_level_checks = message::generate_message_checks(msg, msg_rules.as_ref());
+    let msg_level_checks = message::generate_message_checks(msg, msg_rules.as_ref(), naming);
 
     // Generate oneof checks
-    let oneof_checks = message::generate_oneof_checks(msg, pool)?;
+    let oneof_checks = message::generate_oneof_checks(msg, pool, naming)?;
 
     // Nested message validation (recursive .validate() calls)
     for field in msg.fields() {
         let field_rules = resolve_field_constraints(&field, pool)?;
         if let Some(nested_check) =
-            generate_nested_validation(&field, field_rules.as_ref(), analyzer)?
+            generate_nested_validation(&field, field_rules.as_ref(), analyzer, naming)?
         {
             has_any_rules = true;
             field_checks.push(nested_check);
@@ -154,7 +167,7 @@ fn generate_message(
         return Ok(None);
     }
 
-    let rust_type = naming.proto_to_rust_type(msg.full_name());
+    let rust_type = naming.proto_to_rust_type(msg.full_name())?;
 
     Ok(Some(quote! {
         impl ::prost_protovalidate::Validate for #rust_type {
@@ -643,8 +656,7 @@ fn generate_field_check(
     naming: &NamingContext,
 ) -> Result<Option<TokenStream>, Error> {
     let proto_name = field.name().to_string();
-    let rust_name = naming::field_to_rust_name(&proto_name);
-    let field_ident = quote::format_ident!("{}", rust_name);
+    let field_ident = naming.field_ident(&proto_name);
 
     let explicit_ignore = ignore_mode_of(fr.ignore);
 
@@ -689,7 +701,12 @@ fn generate_field_check(
     // Required check runs outside the ignore guard — a required field must
     // be present regardless of the ignore mode.
     let required_check = if fr.required == Some(true) {
-        Some(generate_required_check(field, &field_ident, &proto_name))
+        Some(generate_required_check(
+            field,
+            &field_ident,
+            &proto_name,
+            naming.backend(),
+        ))
     } else {
         None
     };
@@ -711,7 +728,13 @@ fn generate_field_check(
     }
     if !type_checks.is_empty() {
         let body = quote! { #(#type_checks)* };
-        output.push(wrap_with_ignore_guard(field, &field_ident, ignore, body));
+        output.push(wrap_with_ignore_guard(
+            field,
+            &field_ident,
+            ignore,
+            body,
+            naming.backend(),
+        ));
     }
 
     Ok(Some(quote! { #(#output)* }))
@@ -722,6 +745,7 @@ fn generate_required_check(
     field: &FieldDescriptor,
     field_ident: &proc_macro2::Ident,
     proto_name: &str,
+    backend: crate::Backend,
 ) -> TokenStream {
     if field.is_list() || field.is_map() {
         // Repeated/map fields: required means non-empty
@@ -732,13 +756,21 @@ fn generate_required_check(
                 ));
             }
         }
-    } else if field.kind().as_message().is_some()
-        || (field.supports_presence() && !field.is_required())
-    {
-        // prost stores `Option<T>`: message fields always (regardless of label),
-        // and presence-having non-`required` scalars (proto3 `optional`, proto2
-        // `optional`, synthetic-oneof members). `required = true` checks
-        // `is_some()`.
+    } else if field.kind().as_message().is_some() {
+        // Message fields carry presence in both backends (prost: `Option<T>`,
+        // buffa: `MessageField<T>`); `required = true` checks it.
+        let is_unset = backend.msg_field_is_unset(&quote! { self.#field_ident });
+        quote! {
+            if #is_unset {
+                violations.push(::prost_protovalidate::Violation::new(
+                    #proto_name, "required", "value is required",
+                ));
+            }
+        }
+    } else if field.supports_presence() && !field.is_required() {
+        // Presence-having non-`required` scalars (proto3 `optional`, proto2
+        // `optional`, synthetic-oneof members) are `Option<T>` in both
+        // backends. `required = true` checks `is_some()`.
         quote! {
             if self.#field_ident.is_none() {
                 violations.push(::prost_protovalidate::Violation::new(
@@ -747,15 +779,16 @@ fn generate_required_check(
             }
         }
     } else {
-        // Bare `T` in prost storage — proto3 implicit scalars AND proto2
-        // `required` scalars (the latter has `supports_presence() == true` but
-        // `is_required() == true`, so prost still emits a bare field; see
-        // `field_storage_is_option_scalar` in `rules/mod.rs`). Runtime emits a
-        // `required` violation when the value equals its type's zero (the only
-        // "absent" state for bare-T storage). Mirror that here using the same
-        // default-value predicate as `IGNORE_IF_ZERO_VALUE`, negated so the
-        // violation fires only for default-valued fields.
-        let non_default = generate_default_check(field, field_ident);
+        // Bare `T` storage (both backends) — proto3 implicit scalars AND
+        // proto2 `required` scalars (the latter has `supports_presence() ==
+        // true` but `is_required() == true`, so codegen still sees a bare
+        // field; see `field_storage_is_option_scalar` in `rules/mod.rs`).
+        // Runtime emits a `required` violation when the value equals its
+        // type's zero (the only "absent" state for bare-T storage). Mirror
+        // that here using the same default-value predicate as
+        // `IGNORE_IF_ZERO_VALUE`, negated so the violation fires only for
+        // default-valued fields.
+        let non_default = generate_default_check(field, field_ident, backend);
         quote! {
             if !(#non_default) {
                 violations.push(::prost_protovalidate::Violation::new(
@@ -782,11 +815,12 @@ fn wrap_with_ignore_guard(
     field_ident: &proc_macro2::Ident,
     ignore: Ignore,
     body: TokenStream,
+    backend: crate::Backend,
 ) -> TokenStream {
     match ignore {
         Ignore::Always => quote! {},
         Ignore::IfZeroValue if !field_has_presence(field) => {
-            let default_check = generate_default_check(field, field_ident);
+            let default_check = generate_default_check(field, field_ident, backend);
             quote! {
                 if #default_check {
                     #body
@@ -801,6 +835,7 @@ fn wrap_with_ignore_guard(
 pub(crate) fn generate_default_check(
     field: &FieldDescriptor,
     field_ident: &proc_macro2::Ident,
+    backend: crate::Backend,
 ) -> TokenStream {
     if field.is_list() || field.is_map() {
         quote! { !self.#field_ident.is_empty() }
@@ -819,8 +854,11 @@ pub(crate) fn generate_default_check(
             Kind::Float => quote! { self.#field_ident != 0.0f32 },
             Kind::Double => quote! { self.#field_ident != 0.0f64 },
             Kind::String | Kind::Bytes => quote! { !self.#field_ident.is_empty() },
-            Kind::Enum(_) => quote! { self.#field_ident != 0i32 },
-            Kind::Message(_) => quote! { self.#field_ident.is_some() },
+            Kind::Enum(_) => {
+                let access = backend.enum_to_i32(&quote! { self.#field_ident });
+                quote! { #access != 0i32 }
+            }
+            Kind::Message(_) => backend.msg_field_is_set(&quote! { self.#field_ident }),
         }
     }
 }
@@ -835,6 +873,7 @@ pub(crate) fn generate_default_check(
 pub(crate) fn generate_element_default_check(
     kind: &prost_reflect::Kind,
     access: &TokenStream,
+    backend: crate::Backend,
 ) -> Option<TokenStream> {
     use prost_reflect::Kind;
     Some(match kind {
@@ -846,7 +885,10 @@ pub(crate) fn generate_element_default_check(
         Kind::Float => quote! { #access != 0.0f32 },
         Kind::Double => quote! { #access != 0.0f64 },
         Kind::String | Kind::Bytes => quote! { !#access.is_empty() },
-        Kind::Enum(_) => quote! { #access != 0i32 },
+        Kind::Enum(_) => {
+            let normalized = backend.enum_to_i32(access);
+            quote! { #normalized != 0i32 }
+        }
         Kind::Message(_) => return None,
     })
 }
@@ -1257,6 +1299,7 @@ fn generate_nested_validation(
     field: &FieldDescriptor,
     field_rules: Option<&FieldRules>,
     analyzer: &mut CapabilityAnalyzer<'_>,
+    naming: &NamingContext,
 ) -> Result<Option<TokenStream>, Error> {
     if effective_ignore_mode(field_rules) == Ignore::Always {
         return Ok(None);
@@ -1285,8 +1328,7 @@ fn generate_nested_validation(
     }
 
     let proto_name = field.name().to_string();
-    let rust_name = naming::field_to_rust_name(&proto_name);
-    let field_ident = quote::format_ident!("{}", rust_name);
+    let field_ident = naming.field_ident(&proto_name);
 
     match info.kind {
         NestedValidationKind::Repeated => Ok(Some(quote! {
@@ -1302,8 +1344,9 @@ fn generate_nested_validation(
                 }
             }
         })),
-        NestedValidationKind::Singular => Ok(Some(quote! {
-            if let ::core::option::Option::Some(ref _nested) = self.#field_ident {
+        NestedValidationKind::Singular => {
+            let bind = quote::format_ident!("_nested");
+            let body = quote! {
                 if let ::core::result::Result::Err(_e) =
                     ::prost_protovalidate::Validate::validate(_nested)
                 {
@@ -1312,8 +1355,13 @@ fn generate_nested_validation(
                         violations.push(_viol);
                     }
                 }
-            }
-        })),
+            };
+            Ok(Some(naming.backend().if_msg_field_set(
+                &quote! { self.#field_ident },
+                &bind,
+                &body,
+            )))
+        }
         NestedValidationKind::MapValue(key_kind) => {
             let viol_ident = quote::format_ident!("_viol");
             let prepend = map_key_prepend_call(&proto_name, &viol_ident, &key_kind);

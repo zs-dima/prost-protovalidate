@@ -1,18 +1,17 @@
-//! Descriptor-driven parity sweep (prost backend).
+//! Descriptor-driven parity sweep (buffa backend).
 //!
-//! For every message in `PARITY_REGISTRY`, boundary vectors are generated
-//! from the rules found in the descriptor itself (see
-//! [`prost_protovalidate_tests::sweep`]) and each vector is validated
-//! through both the generated `Validate` impl and the runtime `Validator`.
-//! **Agreement is the oracle** — the generator carries no expected
-//! outcomes, so it can only be incomplete, never wrong.
+//! Reuses the shared boundary-vector generator from
+//! `prost_protovalidate_tests::sweep`; every vector is encoded to bytes,
+//! decoded into the **buffa**-generated type, validated through the
+//! generated `Validate` impl, and compared against the runtime `Validator`
+//! verdict on the dynamic form. Agreement is the oracle.
 
 use std::sync::LazyLock;
 
 use prost::Message;
 use prost_protovalidate::{Error, Validator};
 use prost_protovalidate_tests::sweep::generate_vectors;
-use prost_protovalidate_tests::{
+use prost_protovalidate_tests_buffa::{
     FILE_DESCRIPTOR_SET_BYTES, PARITY_REGISTRY, ValidateFn, sorted_violations,
 };
 use prost_reflect::{DescriptorPool, DynamicMessage};
@@ -24,7 +23,7 @@ static POOL: LazyLock<DescriptorPool> = LazyLock::new(|| {
 static VALIDATOR: LazyLock<Validator> = LazyLock::new(Validator::new);
 
 #[test]
-fn descriptor_driven_boundary_sweep() {
+fn descriptor_driven_boundary_sweep_buffa() {
     let mut total_vectors = 0usize;
     for (full_name, validate_fn) in PARITY_REGISTRY {
         let desc = POOL
@@ -64,9 +63,7 @@ fn assert_paths_agree(
             );
         }
         _ => panic!(
-            "parity mismatch for {full_name} [{label}]:
-  build   = {build:?}
-  runtime = {runtime:?}"
+            "parity mismatch for {full_name} [{label}]:\n  build   = {build:?}\n  runtime = {runtime:?}"
         ),
     }
 }

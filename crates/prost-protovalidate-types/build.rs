@@ -15,9 +15,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     let descriptor_path = base_path.join("file_descriptor_set.bin");
 
+    // With `reflect`, prost-reflect-build wires `ReflectMessage` derives and
+    // the `DESCRIPTOR_POOL` static into the generated types. Without it,
+    // plain prost-build emits reflection-free types (same file name, same
+    // module shape) for the slim build.
+    #[cfg(feature = "reflect")]
     prost_reflect_build::Builder::new()
         .file_descriptor_set_path(&descriptor_path)
         .descriptor_pool("DESCRIPTOR_POOL")
+        .compile_protos(files, &[proto_dir])?;
+
+    #[cfg(not(feature = "reflect"))]
+    prost_build::Config::new()
+        .file_descriptor_set_path(&descriptor_path)
         .compile_protos(files, &[proto_dir])?;
 
     Ok(())

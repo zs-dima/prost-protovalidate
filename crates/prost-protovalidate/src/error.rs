@@ -83,6 +83,7 @@ impl ValidationError {
         self.violations.len()
     }
 
+    #[cfg_attr(not(feature = "reflect"), allow(dead_code))]
     pub(crate) fn violations_mut(&mut self) -> &mut Vec<Violation> {
         &mut self.violations
     }
@@ -116,6 +117,7 @@ pub struct RuntimeError {
 ///
 /// Returns `(should_continue, accumulated_error)`.
 /// If `fail_fast` is true, stops on the first violation.
+#[cfg_attr(not(feature = "reflect"), allow(dead_code))]
 pub(crate) fn merge_violations(
     acc: Option<Error>,
     new_err: Result<(), Error>,

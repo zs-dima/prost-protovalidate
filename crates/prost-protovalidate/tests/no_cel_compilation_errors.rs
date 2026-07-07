@@ -1,4 +1,4 @@
-#![cfg(not(feature = "cel"))]
+#![cfg(all(feature = "reflect", not(feature = "cel")))]
 
 use std::fs;
 use std::path::PathBuf;

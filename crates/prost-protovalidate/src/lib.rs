@@ -10,6 +10,8 @@
 //! For one-off validation, use the [`validate`] convenience function:
 //!
 //! ```rust,no_run
+//! # #[cfg(feature = "reflect")]
+//! # mod example {
 //! use prost_protovalidate::validate;
 //! # fn example(msg: impl prost_reflect::ReflectMessage) {
 //! match validate(&msg) {
@@ -17,16 +19,20 @@
 //!     Err(e) => eprintln!("validation failed: {e}"),
 //! }
 //! # }
+//! # }
 //! ```
 //!
 //! For repeated validations, construct a [`Validator`] once to cache compiled
 //! rules across calls:
 //!
 //! ```rust,no_run
+//! # #[cfg(feature = "reflect")]
+//! # mod example {
 //! use prost_protovalidate::Validator;
 //! # fn example(msg: impl prost_reflect::ReflectMessage) {
 //! let validator = Validator::new();
 //! validator.validate(&msg).expect("message should be valid");
+//! # }
 //! # }
 //! ```
 //!
@@ -34,7 +40,8 @@
 //!
 //! | Feature       | Default | Description |
 //! |---------------|---------|-------------|
-//! | `cel`         | Yes     | CEL expression evaluation and `chrono` time support. Disable for a lighter dependency footprint when only standard rules are used. |
+//! | `cel`         | Yes     | CEL expression evaluation and `chrono` time support (implies `reflect`). Disable for a lighter dependency footprint when only standard rules are used. |
+//! | `reflect`     | Yes (via `cel`) | Runtime reflection: the descriptor-driven [`Validator`], validation filters, and `Violation` rule-path hydration. Disable for a slim, `prost-reflect`-free build carrying only the [`Validate`] trait, [`Violation`]/[`ValidationError`], and the [`validators`] helpers used by `prost-protovalidate-build` generated code. |
 //! | `tonic`       | No      | Adds [`tonic`](https://docs.rs/tonic) integration: a `From<ValidationError> for tonic::Status` impl and a `ValidateRequest` extension trait so gRPC handlers can call `req.validate_inner()?`. |
 //! | `tonic-types` | No      | Implies `tonic`. Attaches a `google.rpc.BadRequest` detail with one `FieldViolation` per [`Violation`] to validation-failure statuses. |
 //!
@@ -43,6 +50,12 @@
 //! `buf.validate.predefined` rules) will produce a [`CompilationError`] at
 //! validation time. Standard rules (range checks, string constraints, format
 //! validators, etc.) work without `cel`.
+//!
+//! Without `reflect`, violations skip descriptor-based rule-path hydration:
+//! [`Violation::to_proto`] emits rule-path elements with names only (no
+//! `field_number`/`field_type` metadata). The string accessors
+//! ([`Violation::field_path`], [`Violation::rule_path`],
+//! [`Violation::rule_id`], [`Violation::message`]) are unaffected.
 //!
 //! # Error types
 //!
@@ -61,11 +74,14 @@
 
 #![warn(missing_docs)]
 
+#[cfg(feature = "reflect")]
 mod config;
 mod error;
+mod formats;
 pub mod time;
 #[cfg(feature = "tonic")]
 pub mod tonic;
+#[cfg(feature = "reflect")]
 mod validator;
 pub mod validators;
 mod violation;
@@ -79,8 +95,10 @@ pub use prost_protovalidate_types as types;
 /// consumer's `Cargo.toml` needing a direct `regex` dependency.
 pub use regex;
 
+#[cfg(feature = "reflect")]
 pub use config::{Filter, ValidationOption, ValidatorOption};
 pub use error::{CompilationError, Error, RuntimeError, ValidationError};
+#[cfg(feature = "reflect")]
 pub use validator::{Validator, validate};
 pub use violation::Violation;
 
@@ -115,4 +133,5 @@ pub trait Validate {
 
 /// Normalize protobuf Edition 2023 descriptors to proto3 format for
 /// compatibility with `prost-reflect` 0.16 which does not support editions.
+#[cfg(feature = "reflect")]
 pub use validator::editions::normalize_edition_descriptor_set;

@@ -4,7 +4,12 @@
 [![docs.rs](https://img.shields.io/docsrs/prost-protovalidate-types)](https://docs.rs/prost-protovalidate-types)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
-Generated Rust types for the [buf.validate](https://github.com/bufbuild/protovalidate) protobuf schema, built with `prost` and `prost-reflect`.
+Generated Rust types for the [buf.validate](https://github.com/bufbuild/protovalidate) protobuf schema, built with `prost` (and optionally `prost-reflect`).
+
+The default `reflect` feature provides the shared `DESCRIPTOR_POOL` and the
+descriptor-based constraint-extraction traits/helpers. Disable it
+(`default-features = false`) for a slim, reflection-free build carrying only
+the generated prost types and `rules_meta`.
 
 ## What this crate provides
 

@@ -1,0 +1,35 @@
+[package]
+name = "prost-protovalidate-tests-buffa"
+description = "Parity tests for the buffa codegen backend (generated Validate vs runtime Validator)"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+buffa = { workspace = true }
+# Generated code references `::buffa_types::google::protobuf::*` for
+# well-known types (Any, Duration, Timestamp, FieldMask, wrappers).
+buffa-types = { workspace = true }
+# Declared explicitly to disable default features (`cel` stays off — the
+# runtime `Validator` used as the parity oracle lives in dev-dependencies
+# with full features). Cargo forbids overriding `default-features` through
+# workspace inheritance.
+prost-protovalidate = { path = "../prost-protovalidate", version = "=0.5.0", default-features = false }
+
+[build-dependencies]
+buffa-build = { workspace = true }
+prost-build = { workspace = true }
+prost-protovalidate-build = { workspace = true }
+
+[dev-dependencies]
+prost = { workspace = true }
+prost-reflect = { workspace = true }
+prost-protovalidate = { path = "../prost-protovalidate", version = "=0.5.0", features = ["cel"] }
+prost-protovalidate-tests = { path = "../prost-protovalidate-tests", version = "=0.5.0" }
+pretty_assertions = { workspace = true }
+
+[lints]
+workspace = true

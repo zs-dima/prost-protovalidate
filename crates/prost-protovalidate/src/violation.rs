@@ -1,11 +1,14 @@
 use std::fmt;
+#[cfg(feature = "reflect")]
 use std::sync::LazyLock;
 
+#[cfg(feature = "reflect")]
 use prost_reflect::{FieldDescriptor, Kind, MessageDescriptor, Value};
 
 use prost_protovalidate_types::{FieldPath, FieldPathElement, field_path_element};
 
 /// Cached `FieldRules` message descriptor for hydrating rule paths.
+#[cfg(feature = "reflect")]
 static FIELD_RULES_DESCRIPTOR: LazyLock<Option<MessageDescriptor>> = LazyLock::new(|| {
     prost_protovalidate_types::DESCRIPTOR_POOL.get_message_by_name("buf.validate.FieldRules")
 });
@@ -33,15 +36,19 @@ pub struct Violation {
     proto: prost_protovalidate_types::Violation,
 
     /// The field descriptor for the violated field, if available.
+    #[cfg(feature = "reflect")]
     field_descriptor: Option<FieldDescriptor>,
 
     /// The field value that failed validation, when available.
+    #[cfg(feature = "reflect")]
     field_value: Option<Value>,
 
     /// The descriptor for the violated rule field, when available.
+    #[cfg(feature = "reflect")]
     rule_descriptor: Option<FieldDescriptor>,
 
     /// The value of the violated rule field, when available.
+    #[cfg(feature = "reflect")]
     rule_value: Option<Value>,
 
     /// Extension field path element for predefined rules, preserved across `sync_proto` calls.
@@ -61,9 +68,13 @@ impl Violation {
     ) -> Self {
         let mut out = Self {
             proto: prost_protovalidate_types::Violation::default(),
+            #[cfg(feature = "reflect")]
             field_descriptor: None,
+            #[cfg(feature = "reflect")]
             field_value: None,
+            #[cfg(feature = "reflect")]
             rule_descriptor: None,
+            #[cfg(feature = "reflect")]
             rule_value: None,
             extension_element: None,
         };
@@ -89,9 +100,13 @@ impl Violation {
     ) -> Self {
         let mut out = Self {
             proto: prost_protovalidate_types::Violation::default(),
+            #[cfg(feature = "reflect")]
             field_descriptor: None,
+            #[cfg(feature = "reflect")]
             field_value: None,
+            #[cfg(feature = "reflect")]
             rule_descriptor: None,
+            #[cfg(feature = "reflect")]
             rule_value: None,
             extension_element: None,
         };
@@ -134,24 +149,28 @@ impl Violation {
     }
 
     /// Returns the field descriptor for the violated field, if available.
+    #[cfg(feature = "reflect")]
     #[must_use]
     pub fn field_descriptor(&self) -> Option<&FieldDescriptor> {
         self.field_descriptor.as_ref()
     }
 
     /// Returns the field value that failed validation, when available.
+    #[cfg(feature = "reflect")]
     #[must_use]
     pub fn field_value(&self) -> Option<&Value> {
         self.field_value.as_ref()
     }
 
     /// Returns the descriptor for the violated rule field, when available.
+    #[cfg(feature = "reflect")]
     #[must_use]
     pub fn rule_descriptor(&self) -> Option<&FieldDescriptor> {
         self.rule_descriptor.as_ref()
     }
 
     /// Returns the value of the violated rule field, when available.
+    #[cfg(feature = "reflect")]
     #[must_use]
     pub fn rule_value(&self) -> Option<&Value> {
         self.rule_value.as_ref()
@@ -160,6 +179,7 @@ impl Violation {
     /// Sets the field path.
     pub fn set_field_path(&mut self, field_path: impl Into<String>) {
         self.proto.field = parse_path(&field_path.into());
+        #[cfg(feature = "reflect")]
         if let Some(descriptor) = self.field_descriptor.as_ref() {
             apply_field_descriptor_to_path(&mut self.proto.field, descriptor);
         }
@@ -191,54 +211,66 @@ impl Violation {
         };
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn has_field_descriptor(&self) -> bool {
         self.field_descriptor.is_some()
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn has_field_value(&self) -> bool {
         self.field_value.is_some()
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn has_rule_descriptor(&self) -> bool {
         self.rule_descriptor.is_some()
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn has_rule_value(&self) -> bool {
         self.rule_value.is_some()
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn set_field_descriptor(&mut self, desc: &FieldDescriptor) {
         self.field_descriptor = Some(desc.clone());
         apply_field_descriptor_to_path(&mut self.proto.field, desc);
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn with_field_descriptor(mut self, desc: &FieldDescriptor) -> Self {
         self.set_field_descriptor(desc);
         self
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn set_field_value(&mut self, value: Value) {
         self.field_value = Some(value);
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn with_rule_path(mut self, rule_path: impl Into<String>) -> Self {
         self.set_rule_path(rule_path);
         self
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn set_rule_descriptor(&mut self, descriptor: FieldDescriptor) {
         self.rule_descriptor = Some(descriptor);
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn with_rule_descriptor(mut self, descriptor: FieldDescriptor) -> Self {
         self.set_rule_descriptor(descriptor);
         self
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn set_rule_value(&mut self, value: Value) {
         self.rule_value = Some(value);
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn with_rule_value(mut self, value: Value) -> Self {
         self.set_rule_value(value);
         self
@@ -294,7 +326,7 @@ impl Violation {
         if parent.is_empty() {
             return;
         }
-        prepend_proto_field_path(&mut self.proto.field, parent, None);
+        prepend_proto_field_path(&mut self.proto.field, parent);
     }
 
     /// Prepend a parent field path with a `repeated` index subscript:
@@ -363,6 +395,7 @@ impl Violation {
         );
     }
 
+    #[cfg(feature = "reflect")]
     pub(crate) fn prepend_path_with_descriptor(
         &mut self,
         parent: &str,
@@ -371,7 +404,7 @@ impl Violation {
         if parent.is_empty() {
             return;
         }
-        prepend_proto_field_path(&mut self.proto.field, parent, Some(descriptor));
+        prepend_proto_field_path_with_descriptor(&mut self.proto.field, parent, descriptor);
     }
 
     /// Prepend a parent rule path element.
@@ -432,6 +465,7 @@ fn prepend_with_subscript(
     *path = Some(FieldPath { elements: merged });
 }
 
+#[cfg(feature = "reflect")]
 fn apply_field_descriptor_to_path(path: &mut Option<FieldPath>, desc: &FieldDescriptor) {
     if let Some(path) = path.as_mut() {
         if let Some(first) = path.elements.first_mut() {
@@ -453,6 +487,9 @@ fn hydrate_and_patch_rule_path(
     path: &mut Option<FieldPath>,
     extension_element: Option<&FieldPathElement>,
 ) {
+    // Descriptor-based hydration needs the `buf.validate` descriptor pool;
+    // without `reflect`, rule-path elements keep names only.
+    #[cfg(feature = "reflect")]
     hydrate_rule_path(path);
     // Re-apply stored extension element metadata (field_number, field_type)
     // that parse_path cannot reconstruct from the string representation.
@@ -468,6 +505,7 @@ fn hydrate_and_patch_rule_path(
     }
 }
 
+#[cfg(feature = "reflect")]
 fn field_path_element_from_descriptor(desc: &FieldDescriptor) -> FieldPathElement {
     FieldPathElement {
         field_number: i32::try_from(desc.number()).ok(),
@@ -485,6 +523,7 @@ fn field_path_element_from_descriptor(desc: &FieldDescriptor) -> FieldPathElemen
 
 /// Populate `key_type` / `value_type` on an element when it has a subscript
 /// and the underlying field is a map.
+#[cfg(feature = "reflect")]
 fn apply_map_metadata(element: &mut FieldPathElement, desc: &FieldDescriptor) {
     if desc.is_map() && element.subscript.is_some() {
         let (key_type, value_type) = map_key_value_types(desc);
@@ -494,6 +533,7 @@ fn apply_map_metadata(element: &mut FieldPathElement, desc: &FieldDescriptor) {
 }
 
 /// Extract the key and value field types for a map field descriptor.
+#[cfg(feature = "reflect")]
 fn map_key_value_types(desc: &FieldDescriptor) -> (Option<i32>, Option<i32>) {
     let kind = desc.kind();
     let Some(entry) = kind.as_message() else {
@@ -508,6 +548,7 @@ fn map_key_value_types(desc: &FieldDescriptor) -> (Option<i32>, Option<i32>) {
     (key_type, value_type)
 }
 
+#[cfg(feature = "reflect")]
 fn normalize_subscript_for_descriptor(
     subscript: Option<field_path_element::Subscript>,
     desc: &FieldDescriptor,
@@ -547,6 +588,7 @@ fn normalize_subscript_for_descriptor(
     }
 }
 
+#[cfg(feature = "reflect")]
 pub(crate) fn kind_to_descriptor_type(kind: &Kind) -> prost_types::field_descriptor_proto::Type {
     match *kind {
         Kind::Double => prost_types::field_descriptor_proto::Type::Double,
@@ -569,26 +611,53 @@ pub(crate) fn kind_to_descriptor_type(kind: &Kind) -> prost_types::field_descrip
     }
 }
 
-fn prepend_proto_field_path(
+/// Prepend a parsed `parent` path before any existing path, merging a
+/// leading subscript-only suffix element into the prefix.
+fn prepend_proto_field_path(path: &mut Option<FieldPath>, parent: &str) {
+    let Some(mut prefix) = parse_path(parent) else {
+        return;
+    };
+
+    let Some(mut suffix) = path.take() else {
+        *path = Some(prefix);
+        return;
+    };
+
+    if let (Some(last_prefix), Some(first_suffix)) =
+        (prefix.elements.last_mut(), suffix.elements.first())
+    {
+        if is_subscript_only_element(first_suffix) && last_prefix.subscript.is_none() {
+            last_prefix.subscript.clone_from(&first_suffix.subscript);
+            suffix.elements.remove(0);
+        }
+    }
+
+    prefix.elements.extend(suffix.elements);
+    *path = Some(prefix);
+}
+
+/// Descriptor-decorating variant of [`prepend_proto_field_path`]: the prefix
+/// element carries `field_number`/`field_type` (and map key/value metadata),
+/// and merged subscripts are normalized against the map key kind.
+#[cfg(feature = "reflect")]
+fn prepend_proto_field_path_with_descriptor(
     path: &mut Option<FieldPath>,
     parent: &str,
-    descriptor: Option<&FieldDescriptor>,
+    descriptor: &FieldDescriptor,
 ) {
     let Some(mut prefix) = parse_path(parent) else {
         return;
     };
 
-    if let Some(descriptor) = descriptor {
-        if let Some(first) = prefix.elements.first_mut() {
-            let subscript = normalize_subscript_for_descriptor(first.subscript.take(), descriptor);
-            *first = field_path_element_from_descriptor(descriptor);
-            first.subscript = subscript;
-            apply_map_metadata(first, descriptor);
-        } else {
-            prefix
-                .elements
-                .push(field_path_element_from_descriptor(descriptor));
-        }
+    if let Some(first) = prefix.elements.first_mut() {
+        let subscript = normalize_subscript_for_descriptor(first.subscript.take(), descriptor);
+        *first = field_path_element_from_descriptor(descriptor);
+        first.subscript = subscript;
+        apply_map_metadata(first, descriptor);
+    } else {
+        prefix
+            .elements
+            .push(field_path_element_from_descriptor(descriptor));
     }
 
     let Some(mut suffix) = path.take() else {
@@ -603,11 +672,9 @@ fn prepend_proto_field_path(
             last_prefix.subscript.clone_from(&first_suffix.subscript);
             suffix.elements.remove(0);
             // After merging the subscript, normalize it and populate map metadata.
-            if let Some(descriptor) = descriptor {
-                last_prefix.subscript =
-                    normalize_subscript_for_descriptor(last_prefix.subscript.take(), descriptor);
-                apply_map_metadata(last_prefix, descriptor);
-            }
+            last_prefix.subscript =
+                normalize_subscript_for_descriptor(last_prefix.subscript.take(), descriptor);
+            apply_map_metadata(last_prefix, descriptor);
         }
     }
 
@@ -746,6 +813,7 @@ fn parse_subscript(token: &str) -> Option<field_path_element::Subscript> {
 
 /// Resolve each element of a rule [`FieldPath`] against the `FieldRules`
 /// descriptor chain, populating `field_number` and `field_type`.
+#[cfg(feature = "reflect")]
 fn hydrate_rule_path(path: &mut Option<FieldPath>) {
     let Some(path) = path.as_mut() else {
         return;
@@ -850,6 +918,7 @@ mod tests {
 
     use super::{Violation, field_path_string, parse_path};
 
+    #[cfg(feature = "reflect")]
     fn descriptor_field(message: &str, field: &str) -> prost_reflect::FieldDescriptor {
         prost_protovalidate_types::DESCRIPTOR_POOL
             .get_message_by_name(message)
@@ -857,6 +926,7 @@ mod tests {
             .expect("descriptor field must exist")
     }
 
+    #[cfg(feature = "reflect")]
     #[test]
     fn prepend_path_with_descriptor_preserves_nested_descriptor_metadata() {
         let parent = descriptor_field("buf.validate.FieldRules", "string");
@@ -956,6 +1026,7 @@ mod tests {
         assert_eq!(unknown.to_string(), "[unknown]");
     }
 
+    #[cfg(feature = "reflect")]
     #[test]
     fn hydrate_rule_path_populates_field_number_and_type() {
         let violation = Violation::new("val", "int32.const", "must equal 1");
@@ -990,6 +1061,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "reflect")]
     #[test]
     fn hydrate_rule_path_handles_unknown_names_gracefully() {
         let violation = Violation::new("val", "nonexistent.field", "message");

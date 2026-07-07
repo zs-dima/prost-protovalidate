@@ -18,11 +18,17 @@ cel = ["prost-protovalidate/cel"]
 [dependencies]
 prost = { workspace = true }
 prost-types = { workspace = true }
+# `prost-reflect` is a regular dependency (not dev): the shared `sweep`
+# vector generator in `src/` builds `DynamicMessage` probe vectors consumed
+# by both this crate's tests and `prost-protovalidate-tests-buffa`.
+prost-reflect = { workspace = true }
 # Declared explicitly (not via `workspace = true`) so this crate can opt out
 # of the workspace dep's default features and toggle `cel` per its own feature
 # flag. Cargo forbids overriding `default-features` through workspace
-# inheritance, hence the path/version pin duplicated here.
-prost-protovalidate = { path = "../prost-protovalidate", version = "=0.4.3", default-features = false }
+# inheritance, hence the path/version pin duplicated here. `reflect` stays on
+# in both modes — the runtime `Validator` is the parity oracle; only `cel`
+# toggles.
+prost-protovalidate = { path = "../prost-protovalidate", version = "=0.5.0", default-features = false, features = ["reflect"] }
 prost-protovalidate-types = { workspace = true }
 
 [build-dependencies]
@@ -30,7 +36,6 @@ prost-build = { workspace = true }
 prost-protovalidate-build = { workspace = true }
 
 [dev-dependencies]
-prost-reflect = { workspace = true }
 pretty_assertions = { workspace = true }
 
 [lints]

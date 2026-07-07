@@ -425,6 +425,7 @@ pub(crate) fn is_ulid(s: &str) -> bool {
 }
 
 #[derive(Clone, Copy)]
+#[cfg_attr(not(feature = "reflect"), allow(dead_code))]
 pub(crate) enum IpVersion {
     Any,
     V4,
@@ -452,6 +453,7 @@ pub(crate) fn is_ip_prefix_with_options(s: &str, version: i64, strict: bool) -> 
     is_ip_prefix(s, version, strict)
 }
 
+#[cfg_attr(not(feature = "reflect"), allow(dead_code))]
 pub(crate) fn is_ip_prefix(s: &str, version: IpVersion, strict: bool) -> bool {
     match version {
         IpVersion::Any => {

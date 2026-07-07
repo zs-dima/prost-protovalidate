@@ -17,15 +17,23 @@ include = ["src/", "proto/", "build.rs", "LICENSE-*", "README.md"]
 [package.metadata.docs.rs]
 all-features = true
 
+[features]
+default = ["reflect"]
+# Descriptor-pool support: the `DESCRIPTOR_POOL` static, extension-descriptor
+# statics, and the constraint-extraction traits/helpers. Disable for a slim
+# build carrying only the generated prost types and `rules_meta` (used by
+# build-time-only validation consumers).
+reflect = ["dep:prost-reflect", "dep:prost-reflect-build"]
+
 [dependencies]
 prost = { workspace = true }
 prost-types = { workspace = true }
-prost-reflect = { workspace = true }
+prost-reflect = { workspace = true, optional = true }
 thiserror = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }
-prost-reflect-build = { workspace = true }
+prost-reflect-build = { workspace = true, optional = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

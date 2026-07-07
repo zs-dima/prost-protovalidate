@@ -9,7 +9,7 @@ mod builder;
 mod descriptor_set;
 pub(crate) mod editions;
 mod evaluator;
-pub(crate) mod formats;
+
 mod lookups;
 pub(crate) mod rules;
 mod wire;

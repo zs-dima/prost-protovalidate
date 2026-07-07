@@ -15,8 +15,8 @@ use crate::config::ValidationConfig;
 use crate::error::{CompilationError, Error, RuntimeError, ValidationError};
 use crate::violation::Violation;
 
-use super::super::formats;
 use super::{Evaluator, MessageEvaluator};
+use crate::formats;
 
 /// Dotted field paths used by `has(...)` in a compiled CEL program, rooted at
 /// a specific top-level binding (`this`, `rules`, or `rule`).

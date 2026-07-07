@@ -110,6 +110,74 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc0b364ead1874514c8c2855ab558056ebfeb775653e7ae45ff72f28f8f3166c"
 
 [[package]]
+name = "buffa"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33f29a40702df4b86ccd84211bfde8cee0bce6d0811450ade4a86a7d0958a23a"
+dependencies = [
+ "bytes",
+ "foldhash",
+ "hashbrown 0.15.5",
+ "once_cell",
+ "rustversion",
+ "serde",
+ "serde_json",
+ "smoothutf8",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "buffa-build"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef33217cabddfad99c0a54d42ddb7ca5b73fa492f7b16ddb621132ef51107556"
+dependencies = [
+ "buffa",
+ "buffa-codegen",
+ "tempfile",
+]
+
+[[package]]
+name = "buffa-codegen"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6681b562b18ea719622d0d12684e88ecbdca600d517557dc7bcef7704631e28"
+dependencies = [
+ "buffa",
+ "buffa-descriptor",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "syn",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "buffa-descriptor"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57ed423c4ecec86d1500879ce42e7e5f6def01bc632985ac756c1fd723fa21fc"
+dependencies = [
+ "buffa",
+ "rustversion",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "buffa-types"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22cb54bcbf6946c58e550eeaf6209047146363dbc7cbdc87e49e67089ed2ff5f"
+dependencies = [
+ "buffa",
+ "bytes",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -806,7 +874,7 @@ dependencies = [
 
 [[package]]
 name = "prost-protovalidate"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "cel",
  "chrono",
@@ -828,7 +896,7 @@ dependencies = [
 
 [[package]]
 name = "prost-protovalidate-build"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "prettyplease",
  "proc-macro2",
@@ -845,7 +913,7 @@ dependencies = [
 
 [[package]]
 name = "prost-protovalidate-conformance"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "prost",
  "prost-build",
@@ -857,7 +925,7 @@ dependencies = [
 
 [[package]]
 name = "prost-protovalidate-tests"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "pretty_assertions",
  "prost",
@@ -870,8 +938,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "prost-protovalidate-tests-buffa"
+version = "0.5.0"
+dependencies = [
+ "buffa",
+ "buffa-build",
+ "buffa-types",
+ "pretty_assertions",
+ "prost",
+ "prost-build",
+ "prost-protovalidate",
+ "prost-protovalidate-build",
+ "prost-protovalidate-tests",
+ "prost-reflect",
+]
+
+[[package]]
 name = "prost-protovalidate-types"
-version = "0.4.3"
+version = "0.5.0"
 dependencies = [
  "pretty_assertions",
  "prost",
@@ -1155,10 +1239,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
+name = "simdutf8"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
 name = "smallvec"
 version = "1.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
+
+[[package]]
+name = "smoothutf8"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36358427d32ecdb1624616deed99eccfef0a167fe5bf40ddb51efe6980bc1ec8"
+dependencies = [
+ "simdutf8",
+]
 
 [[package]]
 name = "syn"

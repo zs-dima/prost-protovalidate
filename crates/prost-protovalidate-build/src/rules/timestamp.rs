@@ -31,24 +31,26 @@ pub(crate) fn generate(
     rules: &TimestampRules,
     field_ident: &Ident,
     proto_name: &str,
+    backend: crate::Backend,
 ) -> Vec<TokenStream> {
     let mut checks = Vec::new();
     let as_tuple = |t: &prost_types::Timestamp| (t.seconds, t.nanos);
+    let field = quote! { self.#field_ident };
+    let bind = quote::format_ident!("_ts");
 
     // Const — runtime emits a constant message; codegen must match.
     if let Some(ref c) = rules.r#const {
         let (secs, nanos) = as_tuple(c);
         let rule_id = meta::CONST_ID;
         let msg = meta::CONST_MESSAGE;
-        checks.push(quote! {
-            if let Some(ref _ts) = self.#field_ident {
-                if (_ts.seconds, _ts.nanos) != (#secs, #nanos) {
-                    violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, #rule_id, #msg,
-                    ));
-                }
+        let body = quote! {
+            if (_ts.seconds, _ts.nanos) != (#secs, #nanos) {
+                violations.push(::prost_protovalidate::Violation::new(
+                    #proto_name, #rule_id, #msg,
+                ));
             }
-        });
+        };
+        checks.push(backend.if_msg_field_set(&field, &bind, &body));
     }
 
     // Static range bounds (`lt_now`/`gt_now` are handled separately below).
@@ -77,11 +79,8 @@ pub(crate) fn generate(
             &value_access,
             proto_name,
         );
-        checks.push(quote! {
-            if let Some(ref _ts) = self.#field_ident {
-                #(#range_checks)*
-            }
-        });
+        let body = quote! { #(#range_checks)* };
+        checks.push(backend.if_msg_field_set(&field, &bind, &body));
     }
 
     // Time-relative rules: `lt_now`, `gt_now`, `within`. Reads wall-clock
@@ -150,14 +149,13 @@ pub(crate) fn generate(
             }
         });
 
-        checks.push(quote! {
-            if let Some(ref _ts) = self.#field_ident {
-                let _now = ::prost_protovalidate::time::now_systemtime();
-                #lt_now_check
-                #gt_now_check
-                #within_check
-            }
-        });
+        let body = quote! {
+            let _now = ::prost_protovalidate::time::now_systemtime();
+            #lt_now_check
+            #gt_now_check
+            #within_check
+        };
+        checks.push(backend.if_msg_field_set(&field, &bind, &body));
     }
 
     checks

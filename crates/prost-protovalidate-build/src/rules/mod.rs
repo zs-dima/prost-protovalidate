@@ -31,23 +31,29 @@ pub(crate) fn generate_type_rules(
     pool: &DescriptorPool,
     naming: &NamingContext,
 ) -> Result<Vec<TokenStream>, Error> {
-    // WKT wrappers: unwrap Option and apply scalar rules to inner `.value`.
+    let backend = naming.backend();
+
+    // WKT wrappers: unwrap the presence wrapper and apply scalar rules to
+    // the inner `.value` (same field name in prost-types and buffa-types).
     //
     // The wrapper unwrap path only applies to singular wrapper fields. For
-    // repeated/map of wrapper, prost stores Vec/HashMap directly — the
-    // capability analyzer routes those to runtime, so this branch is never
-    // reached for them, but we gate defensively.
+    // repeated/map of wrapper, both backends store Vec/HashMap directly —
+    // the capability analyzer routes those to runtime, so this branch is
+    // never reached for them, but we gate defensively.
     if is_wkt_wrapper(field) && !field.is_list() && !field.is_map() {
         let inner_access = quote!(_wkt.value);
-        let inner_checks = generate_scalar_type_checks(type_rules, &inner_access, proto_name, &[])?;
+        let inner_checks =
+            generate_scalar_type_checks(type_rules, &inner_access, proto_name, &[], backend)?;
         if inner_checks.is_empty() {
             return Ok(Vec::new());
         }
-        return Ok(vec![quote! {
-            if let ::core::option::Option::Some(ref _wkt) = self.#field_ident {
-                #(#inner_checks)*
-            }
-        }]);
+        let bind = quote::format_ident!("_wkt");
+        let body = quote! { #(#inner_checks)* };
+        return Ok(vec![backend.if_msg_field_set(
+            &quote! { self.#field_ident },
+            &bind,
+            &body,
+        )]);
     }
 
     // Scalar/enum fields whose prost storage is `Option<T>`: unwrap here so
@@ -70,8 +76,13 @@ pub(crate) fn generate_type_rules(
         // call on the dereferenced value, not `*(_val.method())`.
         let inner_access = quote!((*_val));
         let defined_values = defined_enum_values(&field.kind());
-        let inner_checks =
-            generate_scalar_type_checks(type_rules, &inner_access, proto_name, &defined_values)?;
+        let inner_checks = generate_scalar_type_checks(
+            type_rules,
+            &inner_access,
+            proto_name,
+            &defined_values,
+            backend,
+        )?;
         if inner_checks.is_empty() {
             return Ok(Vec::new());
         }
@@ -109,9 +120,13 @@ pub(crate) fn generate_type_rules(
                 .as_enum()
                 .map(|e| e.values().map(|v| v.number()).collect())
                 .unwrap_or_default();
+            // Rule-type/field-kind agreement is guaranteed upstream
+            // (`rule_type_mismatch_reason` routes mismatches to runtime),
+            // so an enum rule here means an enum-typed access.
+            let enum_access = backend.enum_to_i32(&value_access);
             Ok(enum_rules::generate(
                 r,
-                &value_access,
+                &enum_access,
                 proto_name,
                 &defined_values,
             ))
@@ -120,10 +135,16 @@ pub(crate) fn generate_type_rules(
             repeated::generate(r, field, field_ident, proto_name, pool, naming)
         }
         field_rules::Type::Map(r) => map::generate(r, field, field_ident, proto_name, pool, naming),
-        field_rules::Type::Duration(r) => Ok(duration::generate(r, field_ident, proto_name)),
-        field_rules::Type::Timestamp(r) => Ok(timestamp::generate(r, field_ident, proto_name)),
-        field_rules::Type::FieldMask(r) => Ok(field_mask::generate(r, field_ident, proto_name)),
-        field_rules::Type::Any(r) => Ok(generate_any_rules(r, field_ident, proto_name)),
+        field_rules::Type::Duration(r) => {
+            Ok(duration::generate(r, field_ident, proto_name, backend))
+        }
+        field_rules::Type::Timestamp(r) => {
+            Ok(timestamp::generate(r, field_ident, proto_name, backend))
+        }
+        field_rules::Type::FieldMask(r) => {
+            Ok(field_mask::generate(r, field_ident, proto_name, backend))
+        }
+        field_rules::Type::Any(r) => Ok(generate_any_rules(r, field_ident, proto_name, backend)),
     }
 }
 
@@ -142,6 +163,7 @@ pub(crate) fn generate_scalar_type_checks(
     value_access: &TokenStream,
     proto_name: &str,
     defined_values: &[i32],
+    backend: crate::Backend,
 ) -> Result<Vec<TokenStream>, Error> {
     match type_rules {
         field_rules::Type::Bool(r) => Ok(bool_rules::generate(r, value_access, proto_name)),
@@ -163,12 +185,17 @@ pub(crate) fn generate_scalar_type_checks(
         }
         field_rules::Type::String(r) => Ok(string::generate(r, value_access, proto_name)),
         field_rules::Type::Bytes(r) => Ok(bytes::generate(r, value_access, proto_name)),
-        field_rules::Type::Enum(r) => Ok(enum_rules::generate(
-            r,
-            value_access,
-            proto_name,
-            defined_values,
-        )),
+        field_rules::Type::Enum(r) => {
+            // Rule-type/field-kind agreement is guaranteed upstream, so the
+            // access is enum-typed and safe to normalize.
+            let enum_access = backend.enum_to_i32(value_access);
+            Ok(enum_rules::generate(
+                r,
+                &enum_access,
+                proto_name,
+                defined_values,
+            ))
+        }
         _ => Err(Error::Codegen(format!(
             "unsupported item/key/value rule type for field {proto_name}"
         ))),
@@ -221,35 +248,35 @@ fn generate_any_rules(
     r: &prost_protovalidate_types::AnyRules,
     field_ident: &Ident,
     proto_name: &str,
+    backend: crate::Backend,
 ) -> Vec<TokenStream> {
     let mut checks = Vec::new();
+    let bind = quote::format_ident!("_any");
     if !r.r#in.is_empty() {
         let in_id = any_meta::IN_ID;
         let in_msg = any_meta::IN_MESSAGE;
         let vals = &r.r#in;
-        checks.push(quote! {
-            if let ::core::option::Option::Some(ref _any) = self.#field_ident {
-                if ![#(#vals),*].contains(&_any.type_url.as_str()) {
-                    violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, #in_id, #in_msg,
-                    ));
-                }
+        let body = quote! {
+            if ![#(#vals),*].contains(&_any.type_url.as_str()) {
+                violations.push(::prost_protovalidate::Violation::new(
+                    #proto_name, #in_id, #in_msg,
+                ));
             }
-        });
+        };
+        checks.push(backend.if_msg_field_set(&quote! { self.#field_ident }, &bind, &body));
     }
     if !r.not_in.is_empty() {
         let not_in_id = any_meta::NOT_IN_ID;
         let not_in_msg = any_meta::NOT_IN_MESSAGE;
         let vals = &r.not_in;
-        checks.push(quote! {
-            if let ::core::option::Option::Some(ref _any) = self.#field_ident {
-                if [#(#vals),*].contains(&_any.type_url.as_str()) {
-                    violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, #not_in_id, #not_in_msg,
-                    ));
-                }
+        let body = quote! {
+            if [#(#vals),*].contains(&_any.type_url.as_str()) {
+                violations.push(::prost_protovalidate::Violation::new(
+                    #proto_name, #not_in_id, #not_in_msg,
+                ));
             }
-        });
+        };
+        checks.push(backend.if_msg_field_set(&quote! { self.#field_ident }, &bind, &body));
     }
     checks
 }

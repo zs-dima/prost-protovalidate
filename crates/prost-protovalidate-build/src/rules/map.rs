@@ -19,7 +19,7 @@ pub(crate) fn generate(
     field_ident: &Ident,
     proto_name: &str,
     _pool: &DescriptorPool,
-    _naming: &NamingContext,
+    naming: &NamingContext,
 ) -> Result<Vec<TokenStream>, Error> {
     // Resolve the synthetic `value` field's kind once so we can propagate
     // `enum.defined_only` when the map value is an enum type.
@@ -80,17 +80,25 @@ pub(crate) fn generate(
         if keys_ignore != Ignore::Always {
             if let Some(ref type_rules) = keys.r#type {
                 let key_access = quote!((*_k));
-                let key_checks =
-                    rules::generate_scalar_type_checks(type_rules, &key_access, "", &[])?;
+                let key_checks = rules::generate_scalar_type_checks(
+                    type_rules,
+                    &key_access,
+                    "",
+                    &[],
+                    naming.backend(),
+                )?;
 
                 if !key_checks.is_empty() {
                     let key_subscript =
                         map_key_subscript_prepend("_v_inner", proto_name, &field.kind());
                     let body = if keys_ignore == Ignore::IfZeroValue {
-                        if let Some(default_check) = key_kind
-                            .as_ref()
-                            .and_then(|k| codegen::generate_element_default_check(k, &key_access))
-                        {
+                        if let Some(default_check) = key_kind.as_ref().and_then(|k| {
+                            codegen::generate_element_default_check(
+                                k,
+                                &key_access,
+                                naming.backend(),
+                            )
+                        }) {
                             quote! {
                                 if #default_check {
                                     let violations = &mut _local_violations;
@@ -149,16 +157,20 @@ pub(crate) fn generate(
                     &val_access,
                     "",
                     &defined_values,
+                    naming.backend(),
                 )?;
 
                 if !val_checks.is_empty() {
                     let key_subscript =
                         map_key_subscript_prepend("_v_inner", proto_name, &field.kind());
                     let body = if values_ignore == Ignore::IfZeroValue {
-                        if let Some(default_check) = value_kind
-                            .as_ref()
-                            .and_then(|k| codegen::generate_element_default_check(k, &val_access))
-                        {
+                        if let Some(default_check) = value_kind.as_ref().and_then(|k| {
+                            codegen::generate_element_default_check(
+                                k,
+                                &val_access,
+                                naming.backend(),
+                            )
+                        }) {
                             quote! {
                                 if #default_check {
                                     let violations = &mut _local_violations;

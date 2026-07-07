@@ -1,46 +1,41 @@
 #![allow(clippy::all, warnings)]
 
-pub mod sweep;
+// buffa-generated module tree (`pub mod parity { ... }`).
+include!(concat!(env!("OUT_DIR"), "/_buffa_include.rs"));
 
-pub mod parity {
-    include!(concat!(env!("OUT_DIR"), "/parity.rs"));
-}
-
-// Generated `impl Validate` blocks (references `parity::*` types).
+// Generated `impl Validate` blocks against the buffa types above.
 include!(concat!(env!("OUT_DIR"), "/validate_impl.rs"));
 
-/// Embedded file descriptor set for the test protos.
+/// Embedded file descriptor set for the test protos (same corpus the prost
+/// parity crate compiles — vectors generated against it decode into either
+/// backend's types).
 pub static FILE_DESCRIPTOR_SET_BYTES: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/file_descriptor_set.bin"));
 
 /// Type-erased entry point to a generated `Validate` impl: decodes the
-/// concrete prost message from bytes and runs build-time validation.
+/// concrete **buffa** message from bytes and runs build-time validation.
 pub type ValidateFn = fn(&[u8]) -> Result<(), prost_protovalidate::ValidationError>;
 
 macro_rules! parity_entry {
     ($full_name:literal, $ty:ty) => {{
         fn run(bytes: &[u8]) -> Result<(), prost_protovalidate::ValidationError> {
-            use prost::Message as _;
             use prost_protovalidate::Validate as _;
-            <$ty>::decode(bytes)
-                .expect("parity sweep vectors must decode into the concrete type")
+            <$ty as buffa::Message>::decode_from_slice(bytes)
+                .expect("parity sweep vectors must decode into the concrete buffa type")
                 .validate()
         }
         ($full_name, run as ValidateFn)
     }};
 }
 
-/// Messages that intentionally have no generated `Validate` impl — either
-/// routed to the runtime validator by the capability analyzer (CEL,
-/// unsupported shapes) or carrying no rules at all. Kept next to
-/// [`PARITY_REGISTRY`] so `tests/registry_coverage.rs` can prove every
-/// message in the test protos is a conscious decision, not an omission.
+/// Messages that intentionally have no generated `Validate` impl in buffa
+/// mode. Kept empty on purpose: the build runs with `fail_on_runtime_only`,
+/// so every rule-bearing message in the corpus MUST generate.
 pub static ROUTED_TO_RUNTIME: &[&str] = &[];
 
-/// Every test message with a generated `Validate` impl, keyed by proto full
-/// name. `tests/registry_coverage.rs` asserts completeness against the
-/// descriptor set; `tests/parity_sweep.rs` drives both validation paths
-/// through each entry and requires identical violations.
+/// Every test message with a generated `Validate` impl against buffa types,
+/// keyed by proto full name. Mirrors the prost crate's registry so the
+/// shared descriptor-driven sweep drives both backends identically.
 pub static PARITY_REGISTRY: &[(&str, ValidateFn)] = &[
     parity_entry!("parity.AnyTypeUrl", parity::AnyTypeUrl),
     parity_entry!("parity.Inner", parity::Inner),
@@ -84,9 +79,8 @@ pub static PARITY_REGISTRY: &[(&str, ValidateFn)] = &[
     ),
 ];
 
-/// A flattened violation tuple used for parity comparison. `for_key` is
-/// included so map-key violations surface the runtime's `for_key = true`
-/// marker — a real correctness contract, not cosmetic.
+/// A flattened violation tuple used for parity comparison (same shape as
+/// the prost crate's helper).
 pub type ViolationKey = (String, String, String, String, Option<bool>);
 
 /// Extract sorted violation tuples for order-insensitive comparison.

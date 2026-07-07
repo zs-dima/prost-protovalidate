@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-07
+
+### Added
+
+- **`prost-protovalidate-build` — buffa codegen backend.** New `Backend` enum
+  (`Prost` default, `Buffa`) selected via `Builder::backend`. In `Buffa` mode the
+  generated `impl Validate` blocks target
+  [`buffa`](https://crates.io/crates/buffa)-generated message types (`buffa-build`,
+  or a wrapper such as `connectrpc-build`): message-field presence goes through
+  `MessageField` (`is_set` / `is_unset` / `as_option`) instead of `Option`, enum
+  accesses are normalized with `EnumValue::to_i32` (singular, repeated, and map
+  elements), type idents stay verbatim (proto `UUID` stays Rust `UUID` — prost
+  renames it to `Uuid`), and field/module names follow buffa-codegen's snake-casing
+  and keyword escaping. Type paths are resolved from a descriptor-pool-derived map
+  with sub-package / nested-module deconfliction rather than guessed from name
+  shape. Pairing the buffa backend with `default-features = false` on
+  `prost-protovalidate` gives build-time validation with no `prost-reflect` and no
+  CEL anywhere in the runtime dependency graph.
+- **`prost-protovalidate-build` — `Builder::fail_on_runtime_only`.** Opt-in flag
+  that turns "route to the runtime `Validator`" outcomes (messages with CEL rules,
+  or shapes the generator cannot cover) into a hard build error (new
+  `Error::RuntimeOnly` variant) instead of a `cargo:warning` skip. For consumers
+  that ship no runtime validation path, so a rule can never be silently dropped.
+- **Optional `reflect` feature on `prost-protovalidate`** (default on, implied by
+  `cel`). Gates runtime reflection: the descriptor-driven `Validator`, validation
+  filters (`Filter`, `ValidationOption`, `ValidatorOption`), edition normalization
+  (`normalize_edition_descriptor_set`), and `Violation` rule-path hydration.
+  Disabling it yields a slim, `prost-reflect`-free build carrying only the
+  `Validate` trait, `Violation` / `ValidationError`, the `validators` format
+  helpers, and `time` — the exact surface `prost-protovalidate-build` generated
+  code depends on. With the feature off, `Violation::to_proto` emits rule-path
+  elements with names only (no `field_number` / `field_type`); the string accessors
+  (`field_path`, `rule_path`, `rule_id`, `message`) are unaffected.
+- **Optional `reflect` feature on `prost-protovalidate-types`** (default on). Gates
+  the `DESCRIPTOR_POOL` static, the `buf.validate` extension-descriptor statics, and
+  the constraint-extraction traits and typed helpers (`FieldConstraintsExt`,
+  `MessageConstraintsExt`, …), now housed in a new `constraints` module. Disabling
+  it leaves a reflection-free build of just the generated prost types and
+  `rules_meta`.
+
+### Changed
+
+- **`default-features = false` now selects the slim build.** In 0.4.x, disabling
+  default features produced a CEL-free build that still included the runtime
+  `Validator` (`prost-reflect` was a hard dependency). In 0.5.0 the `Validator`,
+  validation filters, and edition normalization are gated behind the new `reflect`
+  feature, and `cel` implies `reflect`. Consumers that disabled `cel` for a lighter
+  build but still use `Validator` / `validate` must switch to
+  `default-features = false, features = ["reflect"]`. Default builds (with `cel`)
+  are unaffected. The resulting three-tier footprint is `cel` ⊃ `reflect` ⊃ slim.
+- Format validators moved from the reflection-gated `validator/formats` module to a
+  top-level `formats` module so the public `validators::*` helpers compile without
+  `reflect`. No change to the `validators` public API.
+- `prost-protovalidate` now declares its `prost-protovalidate-types` dependency
+  explicitly (not through `workspace = true`) so `default-features` can be toggled
+  and re-enabled through the `reflect` feature; Cargo forbids overriding
+  `default-features` through workspace inheritance.
+- Internal parity infrastructure: new `prost-protovalidate-tests-buffa` crate
+  (`publish = false`) generates `impl Validate` against buffa types for the shared
+  `parity.proto` corpus and asserts identical `Violation` output against the runtime
+  `Validator`; the descriptor-driven boundary-vector generator was extracted to
+  `prost-protovalidate-tests::sweep` and now drives both the prost and buffa parity
+  sweeps. `make lint` / `make test-no-cel` gained `--features reflect` jobs; the
+  benchmark suite now requires the `cel` feature.
+
 ## [0.4.3] - 2026-07-06
 
 ### Added
@@ -140,7 +205,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-call validation options (`FailFast`, `Filter`, `NowFn`).
 - Validator construction options (`DisableLazy`, `AdditionalDescriptorSetBytes`, `MessageDescriptors`).
 
-[Unreleased]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/zs-dima/prost-protovalidate/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.0...v0.4.1

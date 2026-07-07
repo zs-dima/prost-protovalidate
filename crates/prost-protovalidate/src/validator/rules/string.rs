@@ -10,7 +10,7 @@ use crate::config::ValidationConfig;
 use crate::error::{CompilationError, Error, ValidationError};
 use crate::violation::Violation;
 
-use super::super::formats::{
+use crate::formats::{
     IpVersion, is_email, is_host_and_port, is_hostname, is_ip, is_ip_prefix, is_ipv6, is_tuuid,
     is_ulid, is_uri, is_uri_ref, is_uuid, is_valid_http_header_name_loose,
     is_valid_http_header_name_strict, is_valid_http_header_value_loose,

@@ -19,24 +19,26 @@ pub(crate) fn generate(
     rules: &DurationRules,
     field_ident: &Ident,
     proto_name: &str,
+    backend: crate::Backend,
 ) -> Vec<TokenStream> {
     let mut checks = Vec::new();
     let as_tuple = |d: &prost_types::Duration| (d.seconds, d.nanos);
+    let field = quote! { self.#field_ident };
+    let bind = quote::format_ident!("_dur");
 
     // Const
     if let Some(ref c) = rules.r#const {
         let (secs, nanos) = as_tuple(c);
         let rule_id = meta::CONST_ID;
         let msg = meta::const_message(secs, nanos);
-        checks.push(quote! {
-            if let Some(ref _dur) = self.#field_ident {
-                if (_dur.seconds, _dur.nanos) != (#secs, #nanos) {
-                    violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, #rule_id, #msg,
-                    ));
-                }
+        let body = quote! {
+            if (_dur.seconds, _dur.nanos) != (#secs, #nanos) {
+                violations.push(::prost_protovalidate::Violation::new(
+                    #proto_name, #rule_id, #msg,
+                ));
             }
-        });
+        };
+        checks.push(backend.if_msg_field_set(&field, &bind, &body));
     }
 
     // Range
@@ -65,11 +67,8 @@ pub(crate) fn generate(
             &value_access,
             proto_name,
         );
-        checks.push(quote! {
-            if let Some(ref _dur) = self.#field_ident {
-                #(#range_checks)*
-            }
-        });
+        let body = quote! { #(#range_checks)* };
+        checks.push(backend.if_msg_field_set(&field, &bind, &body));
     }
 
     // `in`
@@ -78,15 +77,14 @@ pub(crate) fn generate(
         let rule_id = meta::IN_ID;
         let msg = meta::in_message(&items);
         let vals: Vec<TokenStream> = items.iter().map(|(s, n)| quote! { (#s, #n) }).collect();
-        checks.push(quote! {
-            if let Some(ref _dur) = self.#field_ident {
-                if ![#(#vals),*].contains(&(_dur.seconds, _dur.nanos)) {
-                    violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, #rule_id, #msg,
-                    ));
-                }
+        let body = quote! {
+            if ![#(#vals),*].contains(&(_dur.seconds, _dur.nanos)) {
+                violations.push(::prost_protovalidate::Violation::new(
+                    #proto_name, #rule_id, #msg,
+                ));
             }
-        });
+        };
+        checks.push(backend.if_msg_field_set(&field, &bind, &body));
     }
 
     // `not_in`
@@ -95,15 +93,14 @@ pub(crate) fn generate(
         let rule_id = meta::NOT_IN_ID;
         let msg = meta::not_in_message(&items);
         let vals: Vec<TokenStream> = items.iter().map(|(s, n)| quote! { (#s, #n) }).collect();
-        checks.push(quote! {
-            if let Some(ref _dur) = self.#field_ident {
-                if [#(#vals),*].contains(&(_dur.seconds, _dur.nanos)) {
-                    violations.push(::prost_protovalidate::Violation::new(
-                        #proto_name, #rule_id, #msg,
-                    ));
-                }
+        let body = quote! {
+            if [#(#vals),*].contains(&(_dur.seconds, _dur.nanos)) {
+                violations.push(::prost_protovalidate::Violation::new(
+                    #proto_name, #rule_id, #msg,
+                ));
             }
-        });
+        };
+        checks.push(backend.if_msg_field_set(&field, &bind, &body));
     }
 
     checks

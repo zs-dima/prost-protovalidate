@@ -20,15 +20,25 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["cel"]
-cel = ["dep:cel", "dep:chrono"]
+# Runtime reflection: the descriptor-driven `Validator`, validation filters,
+# and `Violation` enrichment/rule-path hydration. Disable for a slim build
+# that only carries the `Validate` trait, `Violation`/`ValidationError`, and
+# the `validators` helpers consumed by `prost-protovalidate-build` generated
+# code — no `prost-reflect` in the dependency graph.
+reflect = ["dep:prost-reflect", "prost-protovalidate-types/reflect"]
+cel = ["reflect", "dep:cel", "dep:chrono"]
 tonic = ["dep:tonic"]
 tonic-types = ["tonic", "dep:tonic-types"]
 
 [dependencies]
-prost-protovalidate-types = { workspace = true }
+# Declared explicitly (not via `workspace = true`) so `default-features` can
+# be disabled — the `reflect` feature above re-enables the types crate's
+# descriptor pool when runtime reflection is compiled in. Cargo forbids
+# overriding `default-features` through workspace inheritance.
+prost-protovalidate-types = { path = "../prost-protovalidate-types", version = "=0.5.0", default-features = false }
 prost = { workspace = true }
 prost-types = { workspace = true }
-prost-reflect = { workspace = true }
+prost-reflect = { workspace = true, optional = true }
 thiserror = { workspace = true }
 regex = { workspace = true }
 serde_json = { workspace = true }
@@ -47,6 +57,7 @@ prost-build = { workspace = true }
 [[bench]]
 name = "validate"
 harness = false
+required-features = ["cel"]
 
 [lints]
 workspace = true

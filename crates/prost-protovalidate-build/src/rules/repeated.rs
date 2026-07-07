@@ -102,7 +102,7 @@ pub(crate) fn generate(
     field_ident: &Ident,
     proto_name: &str,
     _pool: &DescriptorPool,
-    _naming: &NamingContext,
+    naming: &NamingContext,
 ) -> Result<Vec<TokenStream>, Error> {
     let mut checks = Vec::new();
 
@@ -161,13 +161,16 @@ pub(crate) fn generate(
                     &item_access,
                     "",
                     &defined_values,
+                    naming.backend(),
                 )?;
 
                 if !item_checks.is_empty() {
                     let body = if items_ignore == Ignore::IfZeroValue {
-                        if let Some(default_check) =
-                            codegen::generate_element_default_check(&field.kind(), &item_access)
-                        {
+                        if let Some(default_check) = codegen::generate_element_default_check(
+                            &field.kind(),
+                            &item_access,
+                            naming.backend(),
+                        ) {
                             quote! {
                                 if #default_check {
                                     let violations = &mut _local_violations;

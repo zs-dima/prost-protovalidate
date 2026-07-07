@@ -33,28 +33,39 @@ Add the dependencies to your `Cargo.toml`:
 ```toml
 [dependencies]
 prost = "0.14"
-prost-protovalidate = "0.4"
+prost-protovalidate = "0.5"
 ```
 
 ### Feature Flags
 
-| Feature       | Default | Description                                                                                                                                                            |
-| ------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cel`         | Yes     | CEL expression evaluation and `chrono` time support                                                                                                                    |
-| `tonic`       | No      | gRPC integration: `From<ValidationError> for tonic::Status` and a `ValidateRequest` extension trait (`req.validate_inner()?` in handlers)                              |
-| `tonic-types` | No      | Implies `tonic`. Attaches `google.rpc.BadRequest` details to validation-failure statuses so clients can parse field-level errors without scraping the message string   |
+| Feature       | Default         | Description                                                                                                                                                            |
+| ------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cel`         | Yes             | CEL expression evaluation and `chrono` time support (implies `reflect`)                                                                                                |
+| `reflect`     | Yes (via `cel`) | Runtime reflection: the descriptor-driven `Validator`, validation filters, and `Violation` rule-path hydration                                                          |
+| `tonic`       | No              | gRPC integration: `From<ValidationError> for tonic::Status` and a `ValidateRequest` extension trait (`req.validate_inner()?` in handlers)                              |
+| `tonic-types` | No              | Implies `tonic`. Attaches `google.rpc.BadRequest` details to validation-failure statuses so clients can parse field-level errors without scraping the message string   |
 
-To disable CEL for a lighter dependency footprint (removes `cel`, `chrono`,
+To keep the runtime `Validator` but disable CEL (removes `cel`, `chrono`,
 `pastey`, and `thiserror` 1.x transitive deps):
 
 ```toml
 [dependencies]
-prost-protovalidate = { version = "0.4", default-features = false }
+prost-protovalidate = { version = "0.5", default-features = false, features = ["reflect"] }
 ```
 
 Without `cel`, standard rules (range checks, string constraints, format
 validators, etc.) work normally. Messages with CEL expressions or predefined
 CEL rules will produce a `CompilationError` at validation time.
+
+For build-time-only validation (generated `impl Validate` from
+`prost-protovalidate-build`), drop features entirely — the slim build keeps
+only the `Validate` trait, `Violation`/`ValidationError`, and the
+`validators` helpers, with **no `prost-reflect` in the dependency graph**:
+
+```toml
+[dependencies]
+prost-protovalidate = { version = "0.5", default-features = false }
+```
 
 ### Usage
 
@@ -101,6 +112,7 @@ validator.validate(&request)?;
 
 | prost-protovalidate | prost | prost-reflect | MSRV |
 | ------------------- | ----- | ------------- | ---- |
+| 0.5.x               | 0.14  | 0.16          | 1.86 |
 | 0.4.x               | 0.14  | 0.16          | 1.86 |
 
 ## Validation Modes
@@ -116,6 +128,13 @@ the hot path. Combined with `default-features = false` on
 `prost-protovalidate`, the entire `cel` / `chrono` / `pastey` / `thiserror`
 1.x subtree drops out of your build. Requires `prost-protovalidate-build` in
 `[build-dependencies]`.
+
+Generated code targets `prost` message types by default; select
+`Builder::backend(Backend::Buffa)` when your types come from
+[buffa](https://crates.io/crates/buffa) (`buffa-build` or a wrapper such as
+`connectrpc-build`). With `Builder::fail_on_runtime_only(true)`, any message
+the generator cannot cover fails the build instead of falling back — for
+consumers that ship no runtime validator at all.
 
 ```rust
 use prost_protovalidate::Validate;
