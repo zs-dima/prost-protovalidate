@@ -424,6 +424,47 @@ pub(crate) fn is_ulid(s: &str) -> bool {
     ULID_REGEX.is_match(s)
 }
 
+/// Whether `s` is a single Protobuf identifier: `[A-Za-z_][A-Za-z0-9_]*`.
+fn is_protobuf_ident(id: &str) -> bool {
+    let mut chars = id.chars();
+    match chars.next() {
+        Some(c) if c == '_' || c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+
+/// Whether `s` is a valid Protobuf fully-qualified name — dot-separated
+/// identifiers (`[A-Za-z_][A-Za-z0-9_]*`) — optionally requiring a leading dot.
+/// Mirrors protovalidate's `string.protobuf_fqn` / `string.protobuf_dot_fqn`
+/// regexes. The empty string is handled by the caller's `_empty` rule, so this
+/// returns `false` for it.
+fn is_protobuf_name(s: &str, leading_dot: bool) -> bool {
+    let body = if leading_dot {
+        match s.strip_prefix('.') {
+            Some(rest) => rest,
+            None => return false,
+        }
+    } else if s.starts_with('.') {
+        return false;
+    } else {
+        s
+    };
+    !body.is_empty() && body.split('.').all(is_protobuf_ident)
+}
+
+/// Whether `s` is a valid Protobuf fully-qualified name without a leading dot
+/// (e.g. `foo.bar.Baz`).
+pub(crate) fn is_protobuf_fqn(s: &str) -> bool {
+    is_protobuf_name(s, false)
+}
+
+/// Whether `s` is a valid Protobuf fully-qualified name with a leading dot
+/// (e.g. `.foo.bar.Baz`).
+pub(crate) fn is_protobuf_dot_fqn(s: &str) -> bool {
+    is_protobuf_name(s, true)
+}
+
 #[derive(Clone, Copy)]
 #[cfg_attr(not(feature = "reflect"), allow(dead_code))]
 pub(crate) enum IpVersion {

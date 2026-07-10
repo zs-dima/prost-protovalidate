@@ -5,16 +5,22 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.86-blue.svg)](https://blog.rust-lang.org/2025/04/03/Rust-1.86.0.html)
 
-Validation for Protocol Buffer messages using [buf.validate](https://github.com/bufbuild/protovalidate) rules, built for `prost` and `prost-reflect` — with an optional **compile-time validation path via [`prost-protovalidate-build`](crates/prost-protovalidate-build/)** for schemas without CEL.
+Validation for Protocol Buffer messages using [buf.validate](https://github.com/bufbuild/protovalidate) rules — a runtime engine built on `prost-reflect`, plus a **compile-time validation path via [`prost-protovalidate-build`](crates/prost-protovalidate-build/)** targeting both [`prost`](https://crates.io/crates/prost) and [`buffa`](https://crates.io/crates/buffa) message types.
 
-By default, `prost-protovalidate` evaluates `buf.validate` constraints (including Common Expression Language / CEL expressions) at runtime through `prost-reflect`, enforcing rules directly from your single source of truth — your `.proto` files. For schemas without CEL, `prost-protovalidate-build` generates `impl Validate` at compile time so validation runs through monomorphized direct field access — the fastest path at runtime: no reflection, no CEL interpreter on the hot path.
+By default, `prost-protovalidate` evaluates `buf.validate` constraints (including Common Expression Language / CEL expressions) at runtime through `prost-reflect`, enforcing rules directly from your single source of truth — your `.proto` files. For messages with standard (non-CEL) rules, `prost-protovalidate-build` generates `impl Validate` at compile time so validation runs through monomorphized direct field access — the fastest path at runtime: no reflection, no CEL interpreter on the hot path. On the buffa backend, CEL-bearing messages can additionally be routed through the runtime engine (`runtime_bridge`), giving buffa types the **full** `buf.validate` rule surface from one library.
 
 ## Key Features
 
 - **Compile-time validation (fastest path at runtime)** — [`prost-protovalidate-build`](crates/prost-protovalidate-build/) emits `impl Validate` for messages with standard-only rules; no `prost-reflect` transcoding, no CEL interpreter, monomorphized direct field access. Combined with `default-features = false` on `prost-protovalidate`, the entire `cel` / `chrono` / `pastey` / `thiserror` 1.x subtree drops out of your build. Trades binary size and build time for hot-path speed; messages with CEL automatically fall back to the runtime `Validator` (with a `cargo:warning=` diagnostic, never silently skipped).
-- **Proto as single source of truth** — Define validation rules inside `.proto` files using `buf.validate` and enforce them automatically in Rust.
 - **Runtime validation with CEL** — Leverages `prost-reflect` to dynamically inspect message fields and evaluate complex validation rules, including arbitrary CEL expressions, at runtime.
 - **CEL Evaluation** — Fully supports compiling and evaluating Common Expression Language (CEL) conditions for cross-field or complex constraints.
+- **Proto as single source of truth** — Define validation rules inside `.proto` files using `buf.validate` and enforce them automatically in Rust.
+- **One library for `prost` and `buffa`** — the same `buf.validate` rules, the same violation output, whichever protobuf runtime generates your types. Select `Builder::backend(Backend::Buffa)` for buffa (`buffa-build`, or a wrapper such as `connectrpc-build`).
+- **Two engines, one rule source** — the runtime `Validator` and the compile-time generator both consume the canonical rule ids/messages in `prost-protovalidate-types::rules_meta`, so they cannot drift; a descriptor-driven parity sweep asserts identical violations across both engines.
+- **Harness-verified conformance** — the runtime engine passes the full upstream protovalidate conformance suite: **2872/2872** tests (protovalidate v1.2.2, 0 expected failures).
+- **Fail-closed or full-coverage routing** — `fail_on_runtime_only(true)` turns any rule the generator cannot cover into a hard build error (for services that ship no runtime validator); on buffa, `runtime_bridge(true)` instead delegates those messages to the embedded runtime engine for full CEL coverage.
+- **Three footprint tiers** — full (`cel`, default) ⊃ `reflect` (runtime `Validator` without CEL) ⊃ slim (`default-features = false`; build-time validation only, no `prost-reflect` in the graph).
+- **gRPC integration** — optional `tonic` feature maps `ValidationError` to `tonic::Status`, and `tonic-types` attaches `google.rpc.BadRequest` field-level details.
 - **Edition 2023 support** — Normalizes Edition 2023 descriptors (including `DELIMITED` group encoding) so `prost-reflect` 0.16 handles them correctly.
 - **Modular Crates** — Clear separation between raw protobuf types (`prost-protovalidate-types`) and the runtime validation engine (`prost-protovalidate`).
 
@@ -33,7 +39,7 @@ Add the dependencies to your `Cargo.toml`:
 ```toml
 [dependencies]
 prost = "0.14"
-prost-protovalidate = "0.5"
+prost-protovalidate = "0.6"
 ```
 
 ### Feature Flags
@@ -41,7 +47,7 @@ prost-protovalidate = "0.5"
 | Feature       | Default         | Description                                                                                                                                                            |
 | ------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `cel`         | Yes             | CEL expression evaluation and `chrono` time support (implies `reflect`)                                                                                                |
-| `reflect`     | Yes (via `cel`) | Runtime reflection: the descriptor-driven `Validator`, validation filters, and `Violation` rule-path hydration                                                          |
+| `reflect`     | Yes (via `cel`) | Runtime reflection: the descriptor-driven `Validator`, validation filters, `Violation` rule-path hydration, and the `bridge` module used by `runtime_bridge` generated code |
 | `tonic`       | No              | gRPC integration: `From<ValidationError> for tonic::Status` and a `ValidateRequest` extension trait (`req.validate_inner()?` in handlers)                              |
 | `tonic-types` | No              | Implies `tonic`. Attaches `google.rpc.BadRequest` details to validation-failure statuses so clients can parse field-level errors without scraping the message string   |
 
@@ -50,7 +56,7 @@ To keep the runtime `Validator` but disable CEL (removes `cel`, `chrono`,
 
 ```toml
 [dependencies]
-prost-protovalidate = { version = "0.5", default-features = false, features = ["reflect"] }
+prost-protovalidate = { version = "0.6", default-features = false, features = ["reflect"] }
 ```
 
 Without `cel`, standard rules (range checks, string constraints, format
@@ -64,7 +70,7 @@ only the `Validate` trait, `Violation`/`ValidationError`, and the
 
 ```toml
 [dependencies]
-prost-protovalidate = { version = "0.5", default-features = false }
+prost-protovalidate = { version = "0.6", default-features = false }
 ```
 
 ### Usage
@@ -112,6 +118,7 @@ validator.validate(&request)?;
 
 | prost-protovalidate | prost | prost-reflect | MSRV |
 | ------------------- | ----- | ------------- | ---- |
+| 0.6.x               | 0.14  | 0.16          | 1.86 |
 | 0.5.x               | 0.14  | 0.16          | 1.86 |
 | 0.4.x               | 0.14  | 0.16          | 1.86 |
 
@@ -135,6 +142,16 @@ Generated code targets `prost` message types by default; select
 `connectrpc-build`). With `Builder::fail_on_runtime_only(true)`, any message
 the generator cannot cover fails the build instead of falling back — for
 consumers that ship no runtime validator at all.
+
+On the buffa backend, `Builder::runtime_bridge(true)` is the third option:
+messages the generator cannot cover (CEL rules, unsupported shapes) receive a
+generated `impl Validate` that encodes the message to wire bytes and validates
+it through an embedded runtime engine — so **every** message gets a uniform
+`msg.validate()`, standard rules inline and everything else through the same
+conformance-tested `Validator`. The routed messages require
+`prost-protovalidate` with `reflect`/`cel` enabled and run at
+interpreter speed; keep `fail_on_runtime_only` when you want the slim,
+CEL-free guarantee instead.
 
 ```rust
 use prost_protovalidate::Validate;
@@ -175,10 +192,14 @@ Standard rules work normally; messages with CEL rules produce a
 | Standard only (min_len, gte, email, etc.)      | Yes                         | `msg.validate()` (compile-time, fastest) |
 | Time-relative timestamp (lt_now, gt_now, within)| Yes (reads `SystemTime::now()`) | `msg.validate()` (compile-time, fastest) |
 | `repeated.unique` on float/double              | Yes (canonical IEEE-754 bits) | `msg.validate()` (compile-time, fastest) |
-| CEL only (expressions)                         | No                          | `validator.validate(&msg)` (runtime)     |
-| Mixed (standard + CEL)                         | No                          | `validator.validate(&msg)` (runtime)     |
-| Nested runtime-only dependencies               | No                          | `validator.validate(&msg)` (runtime)     |
+| CEL only (expressions)                         | No¹                         | `validator.validate(&msg)` (runtime)     |
+| Mixed (standard + CEL)                         | No¹                         | `validator.validate(&msg)` (runtime)     |
+| Nested runtime-only dependencies               | No¹                         | `validator.validate(&msg)` (runtime)     |
 | No rules                                       | No                          | —                                        |
+
+¹ On the buffa backend with `runtime_bridge(true)`, these messages **do** get a
+generated `impl Validate` that delegates to the embedded runtime engine, so
+`msg.validate()` works uniformly across the whole schema.
 
 For messages with time-relative timestamp rules, the generated
 `Validate::validate(&self)` impl reads `SystemTime::now()` once per call —
@@ -193,7 +214,7 @@ Enable the `tonic` feature to map validation errors to gRPC statuses:
 
 ```toml
 [dependencies]
-prost-protovalidate = { version = "0.4", features = ["tonic"] }
+prost-protovalidate = { version = "0.6", features = ["tonic"] }
 tonic = "0.14"
 ```
 
@@ -232,7 +253,7 @@ violation, so clients can parse field-level errors programmatically:
 
 ```toml
 [dependencies]
-prost-protovalidate = { version = "0.4", features = ["tonic-types"] }
+prost-protovalidate = { version = "0.6", features = ["tonic-types"] }
 ```
 
 ## Build-Time Code Generation
@@ -242,11 +263,11 @@ Add `prost-protovalidate-build` to your build dependencies:
 ```toml
 [dependencies]
 prost = "0.14"
-prost-protovalidate = "0.4"
+prost-protovalidate = "0.6"
 
 [build-dependencies]
 prost-build = "0.14"
-prost-protovalidate-build = "0.4"
+prost-protovalidate-build = "0.6"
 ```
 
 In your `build.rs`:
@@ -274,11 +295,17 @@ Include the generated validators alongside your prost-generated code:
 include!(concat!(env!("OUT_DIR"), "/validate_impl.rs"));
 ```
 
-Messages with CEL or predefined CEL rules are skipped during code
-generation (with a `cargo:warning` explaining why). Messages that
-transitively depend on runtime-only nested validation are also skipped to
-avoid partial generated validation. Use the runtime `Validator` for those
-messages.
+Messages the generator cannot cover (CEL or predefined CEL rules, and
+messages that transitively depend on runtime-only nested validation) are
+routed by one of three modes:
+
+- **Default** — skipped with a `cargo:warning` explaining why; validate them
+  with the runtime `Validator`.
+- **`fail_on_runtime_only(true)`** — the build fails instead, so a rule can
+  never be silently dropped (for consumers that ship no runtime validator).
+- **`runtime_bridge(true)`** (buffa backend) — a generated `impl Validate`
+  delegates them to an embedded runtime engine, giving the whole schema a
+  uniform `msg.validate()` including full CEL support.
 
 ## Development
 
@@ -293,7 +320,7 @@ make conformance    # conformance suite (requires Go)
 
 ## Conformance
 
-Full conformance with the bufbuild protovalidate test suite: **2854/2854 tests pass** (0 expected failures).
+Full conformance with the bufbuild protovalidate test suite (v1.2.2): **2872/2872 tests pass** (0 expected failures).
 
 Conformance uses a pinned upstream harness from
 `github.com/bufbuild/protovalidate/tools/protovalidate-conformance`.

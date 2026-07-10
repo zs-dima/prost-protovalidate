@@ -41,7 +41,7 @@
 //! | Feature       | Default | Description |
 //! |---------------|---------|-------------|
 //! | `cel`         | Yes     | CEL expression evaluation and `chrono` time support (implies `reflect`). Disable for a lighter dependency footprint when only standard rules are used. |
-//! | `reflect`     | Yes (via `cel`) | Runtime reflection: the descriptor-driven [`Validator`], validation filters, and `Violation` rule-path hydration. Disable for a slim, `prost-reflect`-free build carrying only the [`Validate`] trait, [`Violation`]/[`ValidationError`], and the [`validators`] helpers used by `prost-protovalidate-build` generated code. |
+//! | `reflect`     | Yes (via `cel`) | Runtime reflection: the descriptor-driven [`Validator`], validation filters, `Violation` rule-path hydration, and the [`bridge`] module consumed by `prost-protovalidate-build`'s `runtime_bridge` generated code. Disable for a slim, `prost-reflect`-free build carrying only the [`Validate`] trait, [`Violation`]/[`ValidationError`], and the [`validators`] helpers used by `prost-protovalidate-build` generated code. |
 //! | `tonic`       | No      | Adds [`tonic`](https://docs.rs/tonic) integration: a `From<ValidationError> for tonic::Status` impl and a `ValidateRequest` extension trait so gRPC handlers can call `req.validate_inner()?`. |
 //! | `tonic-types` | No      | Implies `tonic`. Attaches a `google.rpc.BadRequest` detail with one `FieldViolation` per [`Violation`] to validation-failure statuses. |
 //!
@@ -81,6 +81,8 @@
 // docs (docs.rs) still lint every link.
 #![cfg_attr(not(feature = "reflect"), allow(rustdoc::broken_intra_doc_links))]
 
+#[cfg(feature = "reflect")]
+pub mod bridge;
 #[cfg(feature = "reflect")]
 mod config;
 mod error;

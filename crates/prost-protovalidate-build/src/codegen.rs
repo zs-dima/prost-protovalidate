@@ -21,6 +21,23 @@ use crate::message;
 use crate::naming::NamingContext;
 use crate::rules;
 
+/// Result of a full [`generate`] pass.
+pub(crate) struct GenerateOutput {
+    /// Emitted `impl Validate` blocks, plus the shared runtime-bridge accessor
+    /// when any message was routed through the bridge.
+    pub tokens: TokenStream,
+    /// Whether at least one message was emitted as a runtime-bridge impl, so
+    /// the caller must embed the descriptor set next to the generated file.
+    pub needs_fds: bool,
+}
+
+/// A single generated `impl Validate`, tagged with whether it delegates to the
+/// runtime bridge (which needs the shared accessor + embedded descriptor set).
+struct MessageImpl {
+    tokens: TokenStream,
+    is_bridge: bool,
+}
+
 /// Decode a `buf.validate` extension from options using a pool-local descriptor.
 ///
 /// Extension descriptors must come from the same [`DescriptorPool`] as the
@@ -74,17 +91,34 @@ pub(crate) fn resolve_oneof_required(
 /// With `fail_on_runtime_only`, any message the generator would route to the
 /// runtime validator (or fail to generate) aborts code generation instead of
 /// being skipped with a warning.
+///
+/// With `runtime_bridge`, such messages instead receive an `impl Validate` that
+/// encodes the message to wire bytes and delegates to the runtime `Validator`
+/// through the embedded descriptor set (buffa backend only). Mutually exclusive
+/// with `fail_on_runtime_only`; the caller enforces that.
 pub(crate) fn generate(
     pool: &DescriptorPool,
     naming: &NamingContext,
     fail_on_runtime_only: bool,
-) -> Result<TokenStream, Error> {
+    runtime_bridge: bool,
+) -> Result<GenerateOutput, Error> {
     let mut output = TokenStream::new();
+    let mut needs_fds = false;
     let mut analyzer = CapabilityAnalyzer::new(pool, naming);
 
     for message in pool.all_messages() {
-        match generate_message(pool, &message, naming, &mut analyzer, fail_on_runtime_only) {
-            Ok(Some(tokens)) => output.extend(tokens),
+        match generate_message(
+            pool,
+            &message,
+            naming,
+            &mut analyzer,
+            fail_on_runtime_only,
+            runtime_bridge,
+        ) {
+            Ok(Some(generated)) => {
+                needs_fds |= generated.is_bridge;
+                output.extend(generated.tokens);
+            }
             Ok(None) => {}
             Err(e) if fail_on_runtime_only => return Err(e),
             Err(e) => {
@@ -94,7 +128,15 @@ pub(crate) fn generate(
         }
     }
 
-    Ok(output)
+    // Emit the shared bridge accessor once, only when a message routes through it.
+    if needs_fds {
+        output.extend(bridge_accessor_tokens());
+    }
+
+    Ok(GenerateOutput {
+        tokens: output,
+        needs_fds,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,10 +153,14 @@ fn generate_message(
     naming: &NamingContext,
     analyzer: &mut CapabilityAnalyzer<'_>,
     fail_on_runtime_only: bool,
-) -> Result<Option<TokenStream>, Error> {
+    runtime_bridge: bool,
+) -> Result<Option<MessageImpl>, Error> {
     match analyzer.capability_for(msg)? {
         MessageCapability::NoRules => return Ok(None),
         MessageCapability::RuntimeOnly(reason) => {
+            if runtime_bridge {
+                return Ok(Some(generate_bridge_impl(msg, naming)?));
+            }
             if fail_on_runtime_only {
                 return Err(Error::RuntimeOnly(reason));
             }
@@ -169,7 +215,7 @@ fn generate_message(
 
     let rust_type = naming.proto_to_rust_type(msg.full_name())?;
 
-    Ok(Some(quote! {
+    let tokens = quote! {
         impl ::prost_protovalidate::Validate for #rust_type {
             fn validate(&self) -> ::core::result::Result<(), ::prost_protovalidate::ValidationError> {
                 let mut violations = ::std::vec::Vec::new();
@@ -185,7 +231,59 @@ fn generate_message(
                 }
             }
         }
+    };
+    Ok(Some(MessageImpl {
+        tokens,
+        is_bridge: false,
     }))
+}
+
+/// Emit a runtime-bridge `impl Validate` for a message the compile-time
+/// generator cannot cover (CEL or an unsupported shape). The message is encoded
+/// to protobuf wire bytes and validated through the shared [`RuntimeBridge`],
+/// reusing the full runtime engine — including the CEL interpreter — instead of
+/// a second code path. Emitted only in `runtime_bridge` mode (buffa backend).
+fn generate_bridge_impl(
+    msg: &MessageDescriptor,
+    naming: &NamingContext,
+) -> Result<MessageImpl, Error> {
+    let rust_type = naming.proto_to_rust_type(msg.full_name())?;
+    let full_name = msg.full_name();
+
+    let tokens = quote! {
+        impl ::prost_protovalidate::Validate for #rust_type {
+            fn validate(&self) -> ::core::result::Result<(), ::prost_protovalidate::ValidationError> {
+                let __bytes = ::buffa::Message::encode_to_vec(self);
+                __prost_protovalidate_runtime_bridge()
+                    .validate_wire(#full_name, &__bytes)
+                    .map_err(::prost_protovalidate::bridge::error_to_validation_error)
+            }
+        }
+    };
+    Ok(MessageImpl {
+        tokens,
+        is_bridge: true,
+    })
+}
+
+/// The shared lazily-initialized [`RuntimeBridge`] accessor, emitted once per
+/// generated file when any message routes through the runtime bridge. The
+/// descriptor set is embedded from the file the `Builder` writes alongside the
+/// generated code (`prost_protovalidate_validate.fds` in `OUT_DIR`).
+fn bridge_accessor_tokens() -> TokenStream {
+    quote! {
+        fn __prost_protovalidate_runtime_bridge()
+        -> &'static ::prost_protovalidate::bridge::RuntimeBridge {
+            static __PROST_PROTOVALIDATE_BRIDGE:
+                ::std::sync::LazyLock<::prost_protovalidate::bridge::RuntimeBridge> =
+                ::std::sync::LazyLock::new(|| {
+                    ::prost_protovalidate::bridge::RuntimeBridge::from_fds(::core::include_bytes!(
+                        ::core::concat!(::core::env!("OUT_DIR"), "/prost_protovalidate_validate.fds")
+                    ))
+                });
+            &__PROST_PROTOVALIDATE_BRIDGE
+        }
+    }
 }
 
 /// Check if message-level rules contain CEL expressions.

@@ -2,7 +2,7 @@
 
 Compile-time code generator for Protocol Buffer validation using [buf.validate](https://github.com/bufbuild/protovalidate) rules, built for `prost` and [buffa](https://crates.io/crates/buffa) — direct field access at runtime, no reflection, no CEL interpreter on the hot path.
 
-Generates `impl prost_protovalidate::Validate` for messages with standard `buf.validate` field constraints. Messages containing CEL expressions are excluded at build time and fall back to runtime evaluation via `prost_protovalidate::Validator`.
+Generates `impl prost_protovalidate::Validate` for messages with standard `buf.validate` field constraints. Messages containing CEL expressions are, per your choice, skipped with a `cargo:warning` (validate them via the runtime `prost_protovalidate::Validator`), turned into a hard build error (`fail_on_runtime_only`), or — on the buffa backend — routed through an embedded runtime engine (`runtime_bridge`) so the whole schema, CEL included, validates through one uniform `msg.validate()`.
 
 ## Usage
 
@@ -11,7 +11,7 @@ Add the dependency to your `Cargo.toml`:
 ```toml
 [build-dependencies]
 prost-build = "0.14"
-prost-protovalidate-build = "0.5"
+prost-protovalidate-build = "0.6"
 ```
 
 In your `build.rs`:
@@ -61,6 +61,23 @@ Pairing the buffa backend with `default-features = false` on
 `prost-protovalidate` yields build-time validation with no `prost-reflect`
 and no CEL anywhere in the runtime dependency graph.
 
+Alternatively, `runtime_bridge(true)` (instead of `fail_on_runtime_only`)
+routes CEL-bearing and other uncoverable messages through an embedded
+runtime engine: they get a generated `impl Validate` that encodes the
+message to wire bytes and validates it with the same conformance-tested
+`Validator` the runtime path uses — full `buf.validate` coverage, uniform
+`msg.validate()` across the schema. The routed messages require
+`prost-protovalidate` with `reflect`/`cel` enabled, and the generated code
+must be included from `OUT_DIR`:
+
+```rust,ignore
+prost_protovalidate_build::Builder::new()
+    .file_descriptor_set_path(&descriptor_path)?
+    .backend(prost_protovalidate_build::Backend::Buffa)
+    .runtime_bridge(true)
+    .compile()?;
+```
+
 ## Supported Rules
 
 - **Scalar**: bool const, numeric comparisons (gt/gte/lt/lte/const/in/not_in), string (min_len/max_len/pattern/prefix/suffix/contains/in/not_in/well-known formats), bytes (min_len/max_len/pattern/prefix/suffix/in/not_in/well-known formats), enum (const/in/not_in/defined_only)
@@ -76,9 +93,10 @@ and no CEL anywhere in the runtime dependency graph.
 
 ## Limitations
 
-- **CEL expressions** are not evaluated at build time. Messages with CEL rules (field-level or message-level) are skipped with a `cargo:warning` — or fail the build when `fail_on_runtime_only(true)` is set.
-- **Predefined CEL constraints** (custom rules) are not supported.
-- **Nested runtime-only dependencies** (for example, nested CEL or unsupported nested rules) cause parent message codegen to be skipped to prevent partial validation.
+- **CEL expressions** are not compiled to Rust at build time. Messages with CEL rules (field-level or message-level) are skipped with a `cargo:warning`, fail the build when `fail_on_runtime_only(true)` is set, or — on the buffa backend — are delegated to the embedded runtime engine with `runtime_bridge(true)` (interpreter-speed, pulls `reflect`/`cel` into the consumer).
+- **Predefined CEL constraints** (custom rules) follow the same routing as CEL expressions.
+- **Nested runtime-only dependencies** (for example, nested CEL or unsupported nested rules) route the parent message the same way, to prevent partial validation.
+- **`runtime_bridge` requires `OUT_DIR` inclusion** — the generated bridge embeds the descriptor set via `include_bytes!(concat!(env!("OUT_DIR"), …))`, so do not combine it with an `out_dir()` override for code that is subsequently compiled.
 
 ## License
 

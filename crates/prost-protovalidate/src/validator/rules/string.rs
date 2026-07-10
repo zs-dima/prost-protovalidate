@@ -11,10 +11,10 @@ use crate::error::{CompilationError, Error, ValidationError};
 use crate::violation::Violation;
 
 use crate::formats::{
-    IpVersion, is_email, is_host_and_port, is_hostname, is_ip, is_ip_prefix, is_ipv6, is_tuuid,
-    is_ulid, is_uri, is_uri_ref, is_uuid, is_valid_http_header_name_loose,
-    is_valid_http_header_name_strict, is_valid_http_header_value_loose,
-    is_valid_http_header_value_strict,
+    IpVersion, is_email, is_host_and_port, is_hostname, is_ip, is_ip_prefix, is_ipv6,
+    is_protobuf_dot_fqn, is_protobuf_fqn, is_tuuid, is_ulid, is_uri, is_uri_ref, is_uuid,
+    is_valid_http_header_name_loose, is_valid_http_header_name_strict,
+    is_valid_http_header_value_loose, is_valid_http_header_value_strict,
 };
 
 pub(crate) struct StringRuleEval {
@@ -56,6 +56,8 @@ enum WellKnownStringRule {
     Ipv6Prefix,
     HostAndPort,
     Ulid,
+    ProtobufFqn,
+    ProtobufDotFqn,
     HttpHeaderName,
     HttpHeaderValue,
 }
@@ -291,6 +293,8 @@ fn parse_well_known_string_rule(
         WellKnown::Ipv6Prefix(true) => Some(WellKnownStringRule::Ipv6Prefix),
         WellKnown::HostAndPort(true) => Some(WellKnownStringRule::HostAndPort),
         WellKnown::Ulid(true) => Some(WellKnownStringRule::Ulid),
+        WellKnown::ProtobufFqn(true) => Some(WellKnownStringRule::ProtobufFqn),
+        WellKnown::ProtobufDotFqn(true) => Some(WellKnownStringRule::ProtobufDotFqn),
         WellKnown::WellKnownRegex(v) => match prost_protovalidate_types::KnownRegex::try_from(*v) {
             Ok(prost_protovalidate_types::KnownRegex::HttpHeaderName) => {
                 Some(WellKnownStringRule::HttpHeaderName)
@@ -322,7 +326,9 @@ fn parse_well_known_string_rule(
         | WellKnown::Ipv4Prefix(false)
         | WellKnown::Ipv6Prefix(false)
         | WellKnown::HostAndPort(false)
-        | WellKnown::Ulid(false) => None,
+        | WellKnown::Ulid(false)
+        | WellKnown::ProtobufFqn(false)
+        | WellKnown::ProtobufDotFqn(false) => None,
     };
 
     Ok(parsed)
@@ -398,6 +404,8 @@ fn check_well_known(s: &str, rule: WellKnownStringRule, strict: bool) -> Option<
         WellKnownStringRule::Ipv6Prefix => is_ip_prefix(s, IpVersion::V6, true),
         WellKnownStringRule::HostAndPort => is_host_and_port(s, true),
         WellKnownStringRule::Ulid => is_ulid(s),
+        WellKnownStringRule::ProtobufFqn => is_protobuf_fqn(s),
+        WellKnownStringRule::ProtobufDotFqn => is_protobuf_dot_fqn(s),
         WellKnownStringRule::HttpHeaderName | WellKnownStringRule::HttpHeaderValue => {
             unreachable!("header rules are handled above")
         }
@@ -432,6 +440,8 @@ fn well_known_name(rule: WellKnownStringRule) -> &'static str {
         WellKnownStringRule::Ipv6Prefix => "ipv6_prefix",
         WellKnownStringRule::HostAndPort => "host_and_port",
         WellKnownStringRule::Ulid => "ulid",
+        WellKnownStringRule::ProtobufFqn => "protobuf_fqn",
+        WellKnownStringRule::ProtobufDotFqn => "protobuf_dot_fqn",
         WellKnownStringRule::HttpHeaderName | WellKnownStringRule::HttpHeaderValue => {
             unreachable!("header rules use their own id scheme")
         }

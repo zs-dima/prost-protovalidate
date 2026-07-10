@@ -35,7 +35,7 @@ tonic-types = ["tonic", "dep:tonic-types"]
 # be disabled — the `reflect` feature above re-enables the types crate's
 # descriptor pool when runtime reflection is compiled in. Cargo forbids
 # overriding `default-features` through workspace inheritance.
-prost-protovalidate-types = { path = "../prost-protovalidate-types", version = "=0.5.0", default-features = false }
+prost-protovalidate-types = { path = "../prost-protovalidate-types", version = "=0.6.0", default-features = false }
 prost = { workspace = true }
 prost-types = { workspace = true }
 prost-reflect = { workspace = true, optional = true }

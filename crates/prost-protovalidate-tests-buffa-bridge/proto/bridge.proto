@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package bridge;
+
+import "buf/validate/validate.proto";
+
+// Field-level CEL rule → routed to the runtime bridge.
+message CelField {
+  int32 value = 1 [(buf.validate.field).cel = {
+    id: "value.positive",
+    message: "value must be positive",
+    expression: "this > 0"
+  }];
+}
+
+// Message-level CEL rule → routed to the runtime bridge.
+message CelMessage {
+  option (buf.validate.message).cel = {
+    id: "a.lt.b",
+    message: "a must be less than b",
+    expression: "this.a < this.b"
+  };
+
+  int32 a = 1;
+  int32 b = 2;
+}
+
+// A standard rule combined with a CEL rule → routed to the runtime bridge
+// (any CEL presence forces the whole message to the bridge).
+message MixedRules {
+  string code = 1 [
+    (buf.validate.field).string.min_len = 1,
+    (buf.validate.field).cel = {
+      id: "code.no_space",
+      message: "code must not contain a space",
+      expression: "!this.contains(' ')"
+    }
+  ];
+}
+
+// Standard-only rules → inline generated validator (NOT routed to the bridge).
+message StandardOnly {
+  string name = 1 [(buf.validate.field).string.min_len = 2];
+  int32 count = 2 [(buf.validate.field).int32.gte = 0];
+}
+
+// The re-added protobuf_fqn / protobuf_dot_fqn well-known formats (v1.2.2),
+// standard rules → inline generated validator. Exercises the compile-time
+// codegen path for these formats against buffa types.
+message ProtoName {
+  string fqn = 1 [(buf.validate.field).string.protobuf_fqn = true];
+  string dot_fqn = 2 [(buf.validate.field).string.protobuf_dot_fqn = true];
+}
+
+// A *standard* rule on a field inside a *real* proto oneof → routed to the
+// runtime (codegen cannot synthesise variant access), with NO CEL. Exercises
+// the bridge for a non-CEL runtime-only shape.
+message OneofRuntimeOnly {
+  oneof choice {
+    string a = 1 [(buf.validate.field).string.min_len = 3];
+    int32 b = 2;
+  }
+}
+
+// A message whose field type is itself runtime-only → the parent is routed to
+// the runtime as a whole (nested runtime-only dependency) and bridged
+// wholesale. Exercises nested bridging + a field path through the child.
+message HasRuntimeChild {
+  OneofRuntimeOnly child = 1 [(buf.validate.field).required = true];
+}

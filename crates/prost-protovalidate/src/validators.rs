@@ -80,6 +80,23 @@ pub fn is_ulid(s: &str) -> bool {
     internal::is_ulid(s)
 }
 
+/// Returns `true` if `s` is a valid Protobuf fully-qualified name without a
+/// leading dot (dot-separated `[A-Za-z_][A-Za-z0-9_]*` identifiers, e.g.
+/// `foo.bar.Baz`).
+#[inline]
+#[must_use]
+pub fn is_protobuf_fqn(s: &str) -> bool {
+    internal::is_protobuf_fqn(s)
+}
+
+/// Returns `true` if `s` is a valid Protobuf fully-qualified name with a
+/// leading dot (e.g. `.foo.bar.Baz`).
+#[inline]
+#[must_use]
+pub fn is_protobuf_dot_fqn(s: &str) -> bool {
+    internal::is_protobuf_dot_fqn(s)
+}
+
 /// Returns `true` if `s` is a valid IPv4 or IPv6 CIDR prefix (e.g. `192.168.0.0/16`).
 ///
 /// When `strict` is `true`, host bits beyond the prefix length must be zero.

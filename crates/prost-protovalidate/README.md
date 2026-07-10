@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.86-blue.svg)](https://blog.rust-lang.org/2025/04/03/Rust-1.86.0.html)
 
-Validation for Protocol Buffer messages using [buf.validate](https://github.com/bufbuild/protovalidate) rules, built for `prost` and `prost-reflect` — with an optional **compile-time validation path via [`prost-protovalidate-build`](https://crates.io/crates/prost-protovalidate-build)** for schemas without CEL.
+Validation for Protocol Buffer messages using [buf.validate](https://github.com/bufbuild/protovalidate) rules, built for `prost` and `prost-reflect` — with a **compile-time validation path via [`prost-protovalidate-build`](https://crates.io/crates/prost-protovalidate-build)** targeting both `prost` and [`buffa`](https://crates.io/crates/buffa) message types.
 
 By default, dynamically inspects `prost-reflect` message descriptors, compiles `buf.validate` constraint annotations (including CEL expressions), and evaluates them against concrete message instances at runtime. For schemas without CEL, `prost-protovalidate-build` generates `impl Validate` at compile time so validation runs through monomorphized direct field access — the fastest path at runtime: no reflection, no CEL interpreter on the hot path.
 
@@ -14,7 +14,7 @@ By default, dynamically inspects `prost-reflect` message descriptors, compiles `
 ```toml
 [dependencies]
 prost = "0.14"
-prost-protovalidate = "0.4"
+prost-protovalidate = "0.6"
 ```
 
 Annotate your `.proto` files with `buf.validate` rules:
@@ -57,7 +57,7 @@ validator.validate(&request)?;
 
 ## Features
 
-- **Compile-time validation via `prost-protovalidate-build` (fastest at runtime)** — companion crate [`prost-protovalidate-build`](https://crates.io/crates/prost-protovalidate-build) emits `impl Validate` at compile time for messages with standard-only rules. Monomorphized direct field access, no `prost-reflect` transcoding, no CEL interpreter on the hot path. Disable the `cel` feature to also drop `cel`, `chrono`, `pastey`, and transitive `thiserror` 1.x from your dependency tree. Messages that need CEL fall back to the runtime `Validator` automatically (with a `cargo:warning=` diagnostic, never silently skipped).
+- **Compile-time validation via `prost-protovalidate-build` (fastest at runtime)** — companion crate [`prost-protovalidate-build`](https://crates.io/crates/prost-protovalidate-build) emits `impl Validate` at compile time for messages with standard-only rules, targeting `prost` or `buffa` message types. Monomorphized direct field access, no `prost-reflect` transcoding, no CEL interpreter on the hot path. Disable the `cel` feature to also drop `cel`, `chrono`, `pastey`, and transitive `thiserror` 1.x from your dependency tree. Messages that need CEL fall back to the runtime `Validator` (with a `cargo:warning=` diagnostic, never silently skipped) — or, on the buffa backend, delegate to it through the reflect-gated `bridge` module (`runtime_bridge`), so the whole schema validates through one uniform `msg.validate()`.
 - **Dynamic field inspection** via `prost-reflect` descriptors — no static code generation needed for validators.
 - **CEL evaluation** — compiles and evaluates Common Expression Language expressions for cross-field and complex constraints.
 - **Aggregated violations** — collects all constraint failures instead of short-circuiting on the first error.
@@ -67,6 +67,8 @@ validator.validate(&request)?;
 
 | prost-protovalidate | prost | prost-reflect | MSRV |
 | ------------------- | ----- | ------------- | ---- |
+| 0.6.x               | 0.14  | 0.16          | 1.86 |
+| 0.5.x               | 0.14  | 0.16          | 1.86 |
 | 0.4.x               | 0.14  | 0.16          | 1.86 |
 
 ## License

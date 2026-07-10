@@ -4,10 +4,13 @@
 //! **only** standard `buf.validate` rules (no CEL expressions). Validators
 //! run through monomorphized direct field access at runtime — no
 //! `prost-reflect` transcoding, no CEL interpreter on the hot path.
-//! Messages with any CEL rules are excluded and must use the runtime
-//! `prost_protovalidate::Validator` instead — or, with
-//! [`Builder::fail_on_runtime_only`], abort the build so a rule can never
-//! be silently skipped.
+//! Messages with any CEL rules are, per builder configuration, skipped with
+//! a `cargo:warning` (validate them with the runtime
+//! `prost_protovalidate::Validator`), turned into a hard build error
+//! ([`Builder::fail_on_runtime_only`] — a rule can never be silently
+//! skipped), or, on the buffa backend, routed through an embedded runtime
+//! engine ([`Builder::runtime_bridge`]) so the whole schema — CEL included —
+//! validates through one uniform `msg.validate()`.
 //!
 //! # Backends
 //!
@@ -69,6 +72,7 @@ pub struct Builder {
     extern_paths: Vec<(String, String)>,
     backend: Backend,
     fail_on_runtime_only: bool,
+    runtime_bridge: bool,
 }
 
 impl Builder {
@@ -156,6 +160,45 @@ impl Builder {
         self
     }
 
+    /// Route messages the generator cannot cover to the runtime `Validator`
+    /// instead of skipping (`cargo:warning`) or hard-failing them.
+    ///
+    /// In this mode a message with CEL rules (or a shape the generator does not
+    /// support) receives an `impl Validate` that encodes the value to protobuf
+    /// wire bytes and validates it through an embedded descriptor set — reusing
+    /// the full runtime engine, including the CEL interpreter, rather than a
+    /// second code path. This gives buffa-generated types full rule coverage
+    /// (matching the runtime `Validator`) at the cost of pulling
+    /// `prost-protovalidate`'s `reflect`/`cel` features into the consumer for
+    /// the routed messages.
+    ///
+    /// # Feature tiers
+    ///
+    /// The default build-time path (standard rules, especially with
+    /// [`fail_on_runtime_only`](Builder::fail_on_runtime_only)) stays
+    /// reflection- and CEL-free. `runtime_bridge` is the explicit opt-in that
+    /// crosses into the runtime engine: the routed messages require
+    /// `prost-protovalidate` built with `reflect` (and `cel` for CEL rules),
+    /// otherwise the generated code fails to compile.
+    ///
+    /// # `OUT_DIR` requirement
+    ///
+    /// The generated bridge embeds the descriptor set next to the generated code
+    /// and loads it via `include_bytes!(concat!(env!("OUT_DIR"), …))`, so the
+    /// generated file must be included from `OUT_DIR` (the default). Do **not**
+    /// combine `runtime_bridge` with an [`out_dir`](Builder::out_dir) override
+    /// for code that is subsequently compiled — the embedded descriptor set
+    /// would not be found.
+    ///
+    /// Only supported with [`Backend::Buffa`], and mutually exclusive with
+    /// [`Builder::fail_on_runtime_only`]; [`Builder::compile`] returns
+    /// [`Error::ConflictingOptions`] otherwise.
+    #[must_use]
+    pub fn runtime_bridge(mut self, enable: bool) -> Self {
+        self.runtime_bridge = enable;
+        self
+    }
+
     /// Run the code generator.
     ///
     /// # Errors
@@ -163,6 +206,17 @@ impl Builder {
     /// Returns an error if the descriptor set is missing, cannot be parsed,
     /// or the output file cannot be written.
     pub fn compile(self) -> Result<(), Error> {
+        if self.runtime_bridge && self.fail_on_runtime_only {
+            return Err(Error::ConflictingOptions(
+                "runtime_bridge and fail_on_runtime_only are mutually exclusive".to_string(),
+            ));
+        }
+        if self.runtime_bridge && self.backend != Backend::Buffa {
+            return Err(Error::ConflictingOptions(
+                "runtime_bridge is only supported with Backend::Buffa".to_string(),
+            ));
+        }
+
         let fds_bytes = self
             .file_descriptor_set_bytes
             .ok_or(Error::MissingDescriptorSet)?;
@@ -180,9 +234,14 @@ impl Builder {
         };
 
         let naming_ctx = naming::NamingContext::new(&self.extern_paths, self.backend, &pool);
-        let tokens = codegen::generate(&pool, &naming_ctx, self.fail_on_runtime_only)?;
+        let generated = codegen::generate(
+            &pool,
+            &naming_ctx,
+            self.fail_on_runtime_only,
+            self.runtime_bridge,
+        )?;
 
-        let file = syn::parse2(tokens).map_err(|e| Error::Codegen(e.to_string()))?;
+        let file = syn::parse2(generated.tokens).map_err(|e| Error::Codegen(e.to_string()))?;
         let formatted = prettyplease::unparse(&file);
 
         fs::create_dir_all(&out_dir).map_err(|e| Error::Io {
@@ -195,6 +254,18 @@ impl Builder {
             path: output_path,
             source: e,
         })?;
+
+        // When any message was routed through the runtime bridge, embed the
+        // (raw) descriptor set next to the generated code so the emitted
+        // `RuntimeBridge::from_fds(include_bytes!(...))` resolves at the
+        // consumer's compile time.
+        if generated.needs_fds {
+            let fds_path = out_dir.join("prost_protovalidate_validate.fds");
+            fs::write(&fds_path, &fds_bytes).map_err(|e| Error::Io {
+                path: fds_path,
+                source: e,
+            })?;
+        }
 
         Ok(())
     }
@@ -242,4 +313,10 @@ pub enum Error {
          either drop the offending rule or validate this message with the runtime Validator"
     )]
     RuntimeOnly(String),
+
+    /// Two mutually incompatible builder options were combined:
+    /// [`Builder::runtime_bridge`] with [`Builder::fail_on_runtime_only`], or
+    /// `runtime_bridge` on a non-buffa backend.
+    #[error("conflicting builder options: {0}")]
+    ConflictingOptions(String),
 }

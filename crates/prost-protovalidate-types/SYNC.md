@@ -2,7 +2,7 @@
 
 `proto/buf/validate/validate.proto` is vendored from the upstream
 `bufbuild/protovalidate` GitHub repo at the ref `PROTOVALIDATE_SCHEMA_REF`
-in the root `Makefile` (currently `v1.1.1`).
+in the root `Makefile` (currently `v1.2.2`).
 
 ## Sync
 

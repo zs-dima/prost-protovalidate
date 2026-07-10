@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-10
+
+### Added
+
+- **`prost-protovalidate-build` — `Builder::runtime_bridge`.** Opt-in mode
+  (buffa backend only) that gives messages the compile-time generator cannot
+  cover — CEL rules, predefined CEL, or shapes otherwise routed to the runtime —
+  a generated `impl Validate` that encodes the message to protobuf wire bytes and
+  validates it through the runtime `Validator`, reusing the full engine
+  (including the CEL interpreter) instead of a `cargo:warning` skip or a hard
+  error. One library now emits compile-time validators for the **entire**
+  `buf.validate` rule surface against buffa-generated types: standard rules
+  inline, everything else through the bridge — so the buffa path reaches the same
+  coverage as the runtime `Validator`. Mutually exclusive with
+  `fail_on_runtime_only` (returns the new `Error::ConflictingOptions`); the routed
+  messages pull `prost-protovalidate`'s `reflect`/`cel` features into the
+  consumer, while standard-only builds keep the slim `fail_on_runtime_only`
+  footprint.
+- **`prost_protovalidate::bridge`** (feature `reflect`) — `RuntimeBridge`
+  (`from_fds` / `validate_wire`) plus `error_to_validation_error`, the runtime
+  surface the `runtime_bridge` generated code targets. Self-contained so the
+  generated code references only `::prost_protovalidate::*` (no direct
+  `prost-reflect` dependency in the consumer).
+- **`string.protobuf_fqn` / `string.protobuf_dot_fqn`** well-known string rules
+  (re-added upstream in protovalidate v1.2.0) — validate that a string is a valid
+  Protobuf fully-qualified name, without or with a leading dot. Available on both
+  the runtime `Validator` and the compile-time backend, and exposed as
+  `validators::is_protobuf_fqn` / `is_protobuf_dot_fqn`.
+
+### Changed
+
+- **BREAKING (`prost-protovalidate-types`): Synced `validate.proto` to upstream
+  protovalidate v1.2.2** (from v1.1.1), re-adding the `string.protobuf_fqn` /
+  `string.protobuf_dot_fqn` rules removed in 0.3.0. The generated
+  `string_rules::WellKnown` enum gains `ProtobufFqn` and `ProtobufDotFqn`
+  variants — breaking for exhaustive matches on that enum (also reachable
+  through `prost_protovalidate::types`), hence the 0.6.0 bump. The conformance
+  harness pin moved to v1.2.2; full conformance retained — **2872/2872** tests
+  pass (0 expected failures).
+
 ## [0.5.0] - 2026-07-07
 
 ### Added
@@ -205,7 +245,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-call validation options (`FailFast`, `Filter`, `NowFn`).
 - Validator construction options (`DisableLazy`, `AdditionalDescriptorSetBytes`, `MessageDescriptors`).
 
-[Unreleased]: https://github.com/zs-dima/prost-protovalidate/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/zs-dima/prost-protovalidate/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/zs-dima/prost-protovalidate/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.1...v0.4.2

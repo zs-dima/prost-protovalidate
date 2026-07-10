@@ -305,3 +305,84 @@ message Standard {
         "standard message must still be generated:\n{generated}"
     );
 }
+
+#[test]
+fn runtime_bridge_routes_cel_messages_through_the_bridge() {
+    let (builder, out_dir) = builder_from_proto(
+        "cel_bridge.proto",
+        r#"
+syntax = "proto3";
+package shapes;
+import "buf/validate/validate.proto";
+
+message WithCel {
+  int32 value = 1 [(buf.validate.field).cel = {
+    id: "value.positive",
+    message: "value must be positive",
+    expression: "this > 0"
+  }];
+}
+
+message Standard {
+  string name = 1 [(buf.validate.field).string.min_len = 1];
+}
+"#,
+    )
+    .expect("descriptor generation should succeed");
+
+    builder
+        .runtime_bridge(true)
+        .compile()
+        .expect("runtime_bridge should route CEL messages to the bridge");
+
+    let generated =
+        fs::read_to_string(out_dir.join("validate_impl.rs")).expect("generated file should exist");
+
+    // The CEL message gets a bridge impl that delegates to the runtime bridge.
+    assert!(
+        generated.contains("for shapes::WithCel"),
+        "CEL message must get a bridge impl:\n{generated}"
+    );
+    assert!(
+        generated.contains("validate_wire(\"shapes.WithCel\"")
+            && generated.contains("__prost_protovalidate_runtime_bridge"),
+        "bridge impl must call validate_wire through the shared accessor:\n{generated}"
+    );
+    // The standard message keeps its inline generated validator.
+    assert!(
+        generated.contains("for shapes::Standard"),
+        "standard message must still be generated inline:\n{generated}"
+    );
+    // The descriptor set is embedded next to the generated code so the
+    // emitted `include_bytes!` resolves at the consumer's compile time.
+    assert!(
+        out_dir.join("prost_protovalidate_validate.fds").exists(),
+        "runtime_bridge must embed the descriptor set"
+    );
+}
+
+#[test]
+fn runtime_bridge_conflicts_with_fail_on_runtime_only() {
+    let err = Builder::new()
+        .backend(Backend::Buffa)
+        .runtime_bridge(true)
+        .fail_on_runtime_only(true)
+        .compile()
+        .expect_err("runtime_bridge + fail_on_runtime_only must be rejected");
+    assert!(
+        err.to_string().contains("mutually exclusive"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn runtime_bridge_requires_buffa_backend() {
+    let err = Builder::new()
+        .runtime_bridge(true)
+        .compile()
+        .expect_err("runtime_bridge on the prost backend must be rejected");
+    assert!(
+        err.to_string().contains("Backend::Buffa"),
+        "unexpected error: {err}"
+    );
+}

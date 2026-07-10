@@ -325,6 +325,22 @@ fn generate_well_known(
                 quote! { ::prost_protovalidate::validators::is_ulid(&#value_access) },
             )]
         }
+        string_rules::WellKnown::ProtobufFqn(true) => {
+            vec![format_check(
+                value_access,
+                proto_name,
+                "protobuf_fqn",
+                quote! { ::prost_protovalidate::validators::is_protobuf_fqn(&#value_access) },
+            )]
+        }
+        string_rules::WellKnown::ProtobufDotFqn(true) => {
+            vec![format_check(
+                value_access,
+                proto_name,
+                "protobuf_dot_fqn",
+                quote! { ::prost_protovalidate::validators::is_protobuf_dot_fqn(&#value_access) },
+            )]
+        }
         string_rules::WellKnown::Address(true) => {
             vec![format_check(
                 value_access,

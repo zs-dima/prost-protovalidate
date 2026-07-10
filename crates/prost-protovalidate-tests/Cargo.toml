@@ -28,7 +28,7 @@ prost-reflect = { workspace = true }
 # inheritance, hence the path/version pin duplicated here. `reflect` stays on
 # in both modes — the runtime `Validator` is the parity oracle; only `cel`
 # toggles.
-prost-protovalidate = { path = "../prost-protovalidate", version = "=0.5.0", default-features = false, features = ["reflect"] }
+prost-protovalidate = { path = "../prost-protovalidate", version = "=0.6.0", default-features = false, features = ["reflect"] }
 prost-protovalidate-types = { workspace = true }
 
 [build-dependencies]

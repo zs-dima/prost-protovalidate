@@ -49,8 +49,8 @@ publish:
 	cargo publish --workspace
 
 # Pinned upstream version for the conformance tools and the buf.validate schema. Bump together unless a deliberate split is required.
-PROTOVALIDATE_TOOLS_VERSION ?= v1.1.1
-PROTOVALIDATE_SCHEMA_REF ?= v1.1.1
+PROTOVALIDATE_TOOLS_VERSION ?= v1.2.2
+PROTOVALIDATE_SCHEMA_REF ?= v1.2.2
 
 SCHEMA_DEST = crates/prost-protovalidate-types/proto/buf/validate/validate.proto
 SCHEMA_URL  = https://raw.githubusercontent.com/bufbuild/protovalidate/$(PROTOVALIDATE_SCHEMA_REF)/proto/protovalidate/buf/validate/validate.proto
