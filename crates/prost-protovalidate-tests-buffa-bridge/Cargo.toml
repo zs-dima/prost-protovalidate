@@ -16,7 +16,7 @@ buffa-types = { workspace = true }
 # The `runtime_bridge` generated code delegates to the runtime engine, so this
 # crate's own build needs `reflect` + `cel` (unlike the standard-only
 # `prost-protovalidate-tests-buffa`, which builds slim).
-prost-protovalidate = { path = "../prost-protovalidate", version = "=0.6.0", features = [
+prost-protovalidate = { path = "../prost-protovalidate", version = "=0.6.1", features = [
     "cel",
 ] }
 

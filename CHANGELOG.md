@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-07
+
+### Fixed
+
+- **CEL `has()` through index operands.** `has(this.items[0].x)` and `has(this.m['k'].x)` always returned `true`: the presence-path walker stopped at the `_[_]` call, so the field was never registered and reflection filled in its default. The walker now steps over `_[_]` / `_[?_]` and registers the field under its parent collection's path, matching how list elements and map values are reflected. All elements of a collection share one presence path, so an unguarded read of that field on another element errors with "no such key" when it is unset — the same trade-off non-indexed paths already make. Contributed by [DevTamer](https://github.com/DevTamer) in [#13](https://github.com/zs-dima/prost-protovalidate/pull/13).
+- **Clippy 1.99 (`assert_is_empty`).** Tests asserted `x.is_empty()`, which the new lint rejects under `-D warnings`, so CI on `main` went red. Replaced with `assert_eq!` forms that print the value on failure.
+- **Line endings.** Added `.gitattributes` with `* text=auto eol=lf` so Windows checkouts keep LF instead of converting to CRLF.
+
 ## [0.6.0] - 2026-07-10
 
 ### Added
@@ -245,7 +253,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Per-call validation options (`FailFast`, `Filter`, `NowFn`).
 - Validator construction options (`DisableLazy`, `AdditionalDescriptorSetBytes`, `MessageDescriptors`).
 
-[Unreleased]: https://github.com/zs-dima/prost-protovalidate/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/zs-dima/prost-protovalidate/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/zs-dima/prost-protovalidate/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/zs-dima/prost-protovalidate/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/zs-dima/prost-protovalidate/compare/v0.4.2...v0.4.3
