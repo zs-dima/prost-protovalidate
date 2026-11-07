@@ -93,7 +93,7 @@ mod tests {
         encode_varint(300, &mut buf);
         let mut cursor = buf.as_slice();
         assert_eq!(skip_wire_value(&mut cursor, WireType::Varint), Ok(()));
-        assert!(cursor.is_empty());
+        assert_eq!(cursor, &[] as &[u8]);
 
         let mut buf = Vec::new();
         encode_varint(3, &mut buf);
@@ -103,17 +103,17 @@ mod tests {
             skip_wire_value(&mut cursor, WireType::LengthDelimited),
             Ok(())
         );
-        assert!(cursor.is_empty());
+        assert_eq!(cursor, &[] as &[u8]);
 
         let buf = [0u8; 4];
         let mut cursor = buf.as_slice();
         assert_eq!(skip_wire_value(&mut cursor, WireType::ThirtyTwoBit), Ok(()));
-        assert!(cursor.is_empty());
+        assert_eq!(cursor, &[] as &[u8]);
 
         let buf = [0u8; 8];
         let mut cursor = buf.as_slice();
         assert_eq!(skip_wire_value(&mut cursor, WireType::SixtyFourBit), Ok(()));
-        assert!(cursor.is_empty());
+        assert_eq!(cursor, &[] as &[u8]);
     }
 
     #[test]
@@ -150,7 +150,7 @@ mod tests {
 
         let mut cursor = buf.as_slice();
         assert_eq!(skip_wire_value(&mut cursor, WireType::StartGroup), Ok(()));
-        assert!(cursor.is_empty());
+        assert_eq!(cursor, &[] as &[u8]);
     }
 
     #[test]
@@ -169,7 +169,7 @@ mod tests {
         let (_, wire_type) = decode_key(&mut cursor).expect("valid key");
         assert_eq!(wire_type, WireType::StartGroup);
         assert_eq!(skip_wire_value(&mut cursor, WireType::StartGroup), Ok(()));
-        assert!(cursor.is_empty());
+        assert_eq!(cursor, &[] as &[u8]);
     }
 
     #[test]

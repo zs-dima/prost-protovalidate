@@ -282,6 +282,6 @@ mod tests {
         let rules = predefined_constraints_typed(&field)
             .expect("predefined extension should decode")
             .expect("predefined extension should be present");
-        assert!(!rules.cel.is_empty());
+        assert_eq!(rules.cel.len(), 1);
     }
 }
