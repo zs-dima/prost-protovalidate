@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
 
-use cel::common::ast::{EntryExpr, Expr, IdedExpr};
+use cel::common::ast::{EntryExpr, Expr, IdedExpr, operators};
 use cel::extractors::{Arguments, This};
 use cel::objects::Key as CelKey;
 use cel::{
@@ -149,8 +149,10 @@ fn expr_references_ident(ided: &IdedExpr, name: &str) -> bool {
 
 /// Climbs a chain of non-test `Select`s starting at `operand` until it hits
 /// an `Ident` matching `target_binding`, building the dotted path from root to
-/// `leaf`. Returns `None` for any other shape (comprehension iterators,
-/// arbitrary expressions) — those are intentionally not registered.
+/// `leaf`. Index operations (`x[i]`, `x[?i]`) are stepped over without adding
+/// a segment, since list elements and map values are reflected under their
+/// parent field's path. Returns `None` for any other shape (comprehension
+/// iterators, arbitrary expressions) — those are intentionally not registered.
 fn extract_select_path(
     operand: &IdedExpr,
     leaf: &str,
@@ -163,6 +165,13 @@ fn extract_select_path(
             Expr::Select(s) if !s.test => {
                 path.push(s.field.clone());
                 current = &s.operand.expr;
+            }
+            Expr::Call(c)
+                if c.target.is_none()
+                    && c.args.len() == 2
+                    && (c.func_name == operators::INDEX || c.func_name == operators::OPT_INDEX) =>
+            {
+                current = &c.args[0].expr;
             }
             Expr::Ident(name) if name == target_binding => {
                 path.reverse();
@@ -998,8 +1007,8 @@ fn reflect_value_to_cel(
         prost_reflect::Value::Bytes(v) => Ok(CelValue::Bytes(Arc::new(v.to_vec()))),
         prost_reflect::Value::Message(m) => reflect_message_to_cel(m, presence_paths, current_path),
         prost_reflect::Value::List(values) => {
-            // List elements share the parent list's path — `has()` cannot
-            // address individual indices, so per-element pathing isn't needed.
+            // List elements share the parent list's path; `extract_select_path`
+            // skips index operations so `has(this.list[0].x)` matches.
             let mut out = Vec::with_capacity(values.len());
             for value in values {
                 out.push(reflect_value_to_cel(value, presence_paths, current_path)?);
@@ -1572,5 +1581,55 @@ mod tests {
         // `Ident("this")`.
         let p4 = Program::compile("this.list.exists(item, has(item.x))").expect("compile");
         assert!(collect_has_paths(&p4, "this").is_empty());
+
+        // Index operands are skipped: list elements and map values share
+        // their parent's path when reflected.
+        let p5 = Program::compile("has(this.items[0].x)").expect("compile");
+        assert!(
+            collect_has_paths(&p5, "this").contains(&vec!["items".to_string(), "x".to_string()])
+        );
+
+        let p6 = Program::compile("has(this.m['k'].a.b)").expect("compile");
+        assert!(collect_has_paths(&p6, "this").contains(&vec![
+            "m".to_string(),
+            "a".to_string(),
+            "b".to_string()
+        ]));
+
+        let p7 = Program::compile("has(this[0].x)").expect("compile");
+        assert!(collect_has_paths(&p7, "this").contains(&vec!["x".to_string()]));
+
+        // An index rooted at a non-binding expression is still ignored.
+        let p8 = Program::compile("has([this][0].x)").expect("compile");
+        assert!(collect_has_paths(&p8, "this").is_empty());
+    }
+
+    #[test]
+    fn has_through_list_index_reports_absent_element_field() {
+        let descriptor = prost_protovalidate_types::FieldRules::default().descriptor();
+        let cel_field = descriptor
+            .get_field_by_name("cel")
+            .expect("FieldRules should have cel rules");
+        let rule = prost_protovalidate_types::Rule {
+            expression: Some("true".to_string()),
+            ..prost_protovalidate_types::Rule::default()
+        };
+        let mut message = DynamicMessage::new(descriptor);
+        message.set_field(
+            &cel_field,
+            prost_reflect::Value::List(vec![prost_reflect::Value::Message(
+                rule.transcode_to_dynamic(),
+            )]),
+        );
+
+        let program = Program::compile("!has(this.cel[0].id) && has(this.cel[0].expression)")
+            .expect("program should compile");
+        let presence = collect_has_paths(&program, "this");
+        let this =
+            reflect_message_to_cel(&message, &presence, &[]).expect("message should convert");
+        let mut ctx = build_cel_context();
+        ctx.add_variable_from_value("this", this);
+        let result = program.execute(&ctx).expect("execution should succeed");
+        assert_eq!(result, CelValue::Bool(true));
     }
 }
